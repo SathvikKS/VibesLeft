@@ -41,3 +41,37 @@ This project is indexed by GitNexus as **Vibes Left** (47 symbols, 46 relationsh
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+<!-- tauri:start -->
+## Tauri Development Standards
+
+This project uses **Tauri v2**. All IPC, security, and state-management decisions are governed by the design document at [`TAURI_DESIGN.md`](./TAURI_DESIGN.md). Read it before writing or reviewing any Rust backend or frontend IPC code.
+
+### Always Do
+
+- **MUST gate `mcp-bridge` behind `#[cfg(debug_assertions)]`** — it must never ship in a production binary.
+- **MUST define a typed `AppError` enum** and return `Result<T, AppError>` from every `#[tauri::command]`.
+- **MUST validate user-controlled URLs and paths** before passing them to `opener` or any shell/FS operation.
+- **MUST mirror Rust payload structs as TypeScript interfaces** in `src/bindings/` when adding or changing a command.
+- **MUST use capability files** (`src-tauri/capabilities/`) to grant permissions — never enable `dangerousRemoteUrlIpcAccess` without explicit scoping.
+
+### Never Do
+
+- NEVER set `"csp": null` in `tauri.conf.json` for production builds.
+- NEVER hold a `std::sync::Mutex` lock across an `await` point — use `tokio::sync::Mutex` instead.
+- NEVER interpolate raw user input into shell commands, SQL, or file paths inside a command handler.
+- NEVER grant broad permissions (`fs:default`, `fs:allow-write`) without a matching `deny` scope.
+
+### Key Sections in TAURI_DESIGN.md
+
+| Topic | Section |
+|---|---|
+| IPC command patterns & naming | §2 IPC Command Standards |
+| Typed error enum | §3 Error Handling |
+| Capabilities / ACL / CSP | §4 Security |
+| State management & locking | §5 State Management |
+| Event system | §6 Event System |
+| Plugin safety (MCP bridge, opener) | §7 Plugin Safety Protocols |
+| Pre-release checklist | §9 Pre-Release Checklist |
+
+<!-- tauri:end -->
