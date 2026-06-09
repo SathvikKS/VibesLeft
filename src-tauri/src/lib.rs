@@ -1,4 +1,8 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use tauri::Manager;
+
+mod error;
+mod usage;
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -8,7 +12,12 @@ fn greet(name: &str) -> String {
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet]);
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .invoke_handler(tauri::generate_handler![greet, usage::get_usage_report])
+        .setup(|app| {
+            app.manage(usage::UsageManager::new(app.handle().clone())?);
+            Ok(())
+        });
 
     #[cfg(debug_assertions)]
     {
