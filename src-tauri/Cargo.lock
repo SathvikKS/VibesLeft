@@ -4788,6 +4788,7 @@ name = "vibes-left"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "dirs 5.0.1",
  "keyring",
  "reqwest 0.12.28",

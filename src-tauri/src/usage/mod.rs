@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 
 mod claude;
+mod codex;
 mod creds_cache;
 
 pub(super) use creds_cache::{CachedCredentials, CredsCache};
@@ -50,6 +51,9 @@ pub struct UsageManager {
 impl UsageManager {
     pub fn new(app: tauri::AppHandle) -> Result<Self, AppError> {
         let mut connectors: HashMap<&'static str, Box<dyn UsageConnector>> = HashMap::new();
+
+        let codex = codex::CodexConnector::new(app.clone())?;
+        connectors.insert(codex.provider_name(), Box::new(codex));
 
         let claude = claude::ClaudeConnector::new(app)?;
         connectors.insert(claude.provider_name(), Box::new(claude));
