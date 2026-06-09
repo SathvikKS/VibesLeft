@@ -119,7 +119,7 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto w-full">
         {(
           [
             {
@@ -228,7 +228,7 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
           const statusInfo = getStatusInfo(utilization);
 
           return (
-            <div key={provider.id} className="rounded-xl border bg-card p-5 shadow-sm">
+            <div key={provider.id} className="rounded-xl border bg-card p-5 shadow-sm max-w-2xl mx-auto w-full">
               <div className="flex items-center gap-3 mb-4">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-background border border-border">
                   <provider.icon size={20} className="text-foreground" />

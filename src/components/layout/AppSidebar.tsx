@@ -81,7 +81,7 @@ export const AppSidebar = ({ page, setPage, providerUtilization }: AppSidebarPro
                     <SidebarMenuBadge>
                       <Badge
                         variant="outline"
-                        className={`flex items-center gap-1 ${
+                        className={`flex items-center justify-center gap-1 w-10 ${
                           utilization >= 90
                             ? 'border-red-800/50 bg-red-950/40 text-red-400'
                             : utilization >= 75
