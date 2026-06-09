@@ -1,4 +1,5 @@
 import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { UsageError } from '@/components/providers/UsageError';
 import { getStatusInfo, CacheIndicator } from '@/components/providers/ProviderUsageCard';
@@ -58,6 +59,7 @@ export const ProviderSummaryCard = ({
           {report && (
             <CacheIndicator fetchedAtMs={report.fetched_at_ms} cached={report.cached} />
           )}
+          {loading && !report && <Skeleton className="h-5 w-20 rounded-md" />}
         </div>
       </div>
 
@@ -95,7 +97,17 @@ export const ProviderSummaryCard = ({
           </div>
         </div>
       ) : loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <div className="flex flex-col gap-3">
+          {[0, 1].map((i) => (
+            <div key={i}>
+              <div className="flex items-center justify-between mb-1.5">
+                <Skeleton className="h-2.5 w-16" />
+                <Skeleton className="h-4 w-8" />
+              </div>
+              <Skeleton className="h-1.5 w-full rounded-full" />
+            </div>
+          ))}
+        </div>
       ) : error ? (
         <UsageError error={error} compact />
       ) : null}

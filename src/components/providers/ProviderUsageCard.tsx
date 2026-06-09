@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import type { UsageReport } from '@/bindings/usage';
 import {
@@ -235,3 +236,32 @@ export const ProviderUsageCard = ({ report }: { report: UsageReport }) => {
     </Card>
   );
 };
+
+export const MetricRowSkeleton = () => (
+  <div className="flex flex-col gap-2.5 p-4 rounded-xl bg-card border border-border shadow-sm">
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-7 w-7 rounded-md" />
+        <Skeleton className="h-4 w-24" />
+      </div>
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-5 w-20 rounded-md" />
+        <Skeleton className="h-5 w-10" />
+      </div>
+    </div>
+    <Skeleton className="h-2 w-full rounded-full" />
+    <div className="flex justify-between mt-1">
+      <Skeleton className="h-3 w-28" />
+      <Skeleton className="h-3 w-24" />
+    </div>
+  </div>
+);
+
+export const ProviderUsageCardSkeleton = () => (
+  <Card className="w-full max-w-2xl mx-auto shadow-sm">
+    <CardContent className="p-6 flex flex-col gap-4 bg-muted/30 rounded-xl">
+      <MetricRowSkeleton />
+      <MetricRowSkeleton />
+    </CardContent>
+  </Card>
+);

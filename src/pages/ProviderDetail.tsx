@@ -1,5 +1,5 @@
 import { useUsageReport } from '@/hooks/useUsageReport';
-import { ProviderUsageCard, CacheIndicator } from '@/components/providers/ProviderUsageCard';
+import { ProviderUsageCard, ProviderUsageCardSkeleton, CacheIndicator } from '@/components/providers/ProviderUsageCard';
 import { UsageError } from '@/components/providers/UsageError';
 import { Button } from '@/components/ui/button';
 import { RefreshCw, ArrowLeft } from 'lucide-react';
@@ -54,13 +54,11 @@ export const ProviderDetail = ({ id, setPage }: ProviderDetailProps) => {
 
       {error && <UsageError error={error} />}
 
-      {loading && !report && (
-        <div className="flex items-center justify-center py-12">
-          <p className="text-muted-foreground">Loading usage report\u2026</p>
-        </div>
-      )}
-
-      {report && <ProviderUsageCard report={report} />}
+      {loading ? (
+        <ProviderUsageCardSkeleton />
+      ) : report ? (
+        <ProviderUsageCard report={report} />
+      ) : null}
     </div>
   );
 };

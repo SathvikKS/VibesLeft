@@ -3,6 +3,7 @@ import { useUsageReport } from '@/hooks/useUsageReport';
 import { ENABLED_PROVIDERS } from '@/providers.config';
 import { getStatusInfo } from '@/components/providers/ProviderUsageCard';
 import { ProviderSummaryCard } from '@/components/providers/ProviderSummaryCard';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { AlertTriangle, CheckCircle2, Info } from 'lucide-react';
@@ -196,12 +197,17 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
               </Tooltip>
             </div>
             <div>
-              <p className={`text-4xl font-bold tracking-tight ${valueColor}`}>
-                {anyLoading ? '—' : value}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {anyLoading ? '' : value === 1 ? 'provider' : 'providers'}
-              </p>
+              {anyLoading
+                ? <Skeleton className="h-10 w-12 mt-0.5" />
+                : <p className={`text-4xl font-bold tracking-tight ${valueColor}`}>{value}</p>
+              }
+              <div className="mt-1 h-4">
+                {!anyLoading && (
+                  <p className="text-xs text-muted-foreground">
+                    {value === 1 ? 'provider' : 'providers'}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         ))}
@@ -224,16 +230,16 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
                 </TooltipContent>
               </Tooltip>
             </div>
-            <p className="mt-2 text-4xl font-bold tracking-tight text-foreground">
-              {anyLoading ? '—' : `${globalMaxUtilization}%`}
-            </p>
+            {anyLoading
+              ? <Skeleton className="h-10 w-20 mt-2" />
+              : <p className="mt-2 text-4xl font-bold tracking-tight text-foreground">{globalMaxUtilization}%</p>
+            }
             <p className="mt-1 text-xs text-muted-foreground">most constrained window</p>
           </div>
-          {!anyLoading && allReports.length > 0 && (
-            <div className="flex items-end pb-1 opacity-60">
-              <Sparkline />
-            </div>
-          )}
+          {anyLoading
+            ? <Skeleton className="h-8 w-[180px] rounded-md" />
+            : (!anyLoading && allReports.length > 0 && <div className="flex items-end pb-1 opacity-60"><Sparkline /></div>)
+          }
         </div>
       </div>
       </div>
