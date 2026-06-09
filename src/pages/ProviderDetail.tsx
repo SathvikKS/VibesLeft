@@ -1,5 +1,5 @@
 import { useUsageReport } from '@/hooks/useUsageReport';
-import { ProviderUsageCard } from '@/components/providers/ProviderUsageCard';
+import { ProviderUsageCard, CacheIndicator } from '@/components/providers/ProviderUsageCard';
 import { Button } from '@/components/ui/button';
 import { RefreshCw, ArrowLeft } from 'lucide-react';
 import type { Page } from '@/App';
@@ -24,11 +24,17 @@ export const ProviderDetail = ({ id, setPage }: ProviderDetailProps) => {
             <ArrowLeft className="size-4" />
           </Button>
           <div>
-            <h1 className="text-2xl font-bold text-foreground capitalize">
+            <h1 className="text-2xl font-bold text-foreground capitalize flex items-center gap-2">
               {id}
+              {report && (
+                <CacheIndicator
+                  fetchedAtMs={report.fetched_at_ms}
+                  cached={report.cached}
+                />
+              )}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Detailed usage metrics
+              API Consumption Metrics
             </p>
           </div>
         </div>

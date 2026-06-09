@@ -5,7 +5,8 @@ import { getStatusInfo, CacheIndicator } from '@/components/providers/ProviderUs
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import type { Page } from '@/App';
 
 interface DashboardProps {
@@ -18,20 +19,6 @@ const useProviderReport = (id: string) => {
   return { report, loading, error, id };
 };
 
-const ArcGaugeDecoration = () => (
-  <svg width="56" height="36" viewBox="0 0 56 36">
-    <path d="M 4 34 A 24 24 0 0 1 52 34" stroke="#064e3b" strokeWidth="5" fill="none" strokeLinecap="round" />
-    <path d="M 4 34 A 24 24 0 0 1 52 34" stroke="#34d399" strokeWidth="3" fill="none" strokeLinecap="round" />
-  </svg>
-);
-
-const CriticalBarDecoration = () => (
-  <div className="flex flex-col items-end gap-1.5">
-    <div className="h-1 w-14 rounded-full bg-red-800/50" />
-    <div className="h-1 w-8 rounded-full bg-red-500" />
-    <div className="h-1 w-11 rounded-full bg-red-800/50" />
-  </div>
-);
 
 const Sparkline = () => (
   <svg width="180" height="32" viewBox="0 0 180 32" className="overflow-visible">
@@ -104,74 +91,127 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
 
   return (
     <div className="flex flex-col gap-6 p-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-        <p className="text-sm text-muted-foreground mt-1">Aggregate usage across all providers</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground flex items-center gap-3">
+            Dashboard
+            {allReports.length > 0 && (
+              <Badge
+                variant="outline"
+                className={`gap-1 leading-none ${
+                  overallStatus === 'critical'
+                    ? 'border-red-800/40 bg-red-950/30 text-red-300'
+                    : 'border-emerald-800/40 bg-emerald-950/30 text-emerald-300'
+                }`}
+              >
+                {overallStatus === 'critical' ? (
+                  <AlertTriangle size={12} className="text-red-400" />
+                ) : (
+                  <CheckCircle2 size={12} className="text-emerald-400" />
+                )}
+                {overallStatus === 'critical'
+                  ? 'Vibes off'
+                  : 'All good'}
+              </Badge>
+            )}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">Aggregate usage across all providers</p>
+        </div>
       </div>
 
-      {allReports.length > 0 && (
-        <div
-          className={`flex items-center gap-3 rounded-xl border p-4 ${
-            overallStatus === 'critical'
-              ? 'border-red-800/40 bg-red-950/30 dark:border-red-800/40 dark:bg-red-950/30'
-              : 'border-emerald-800/40 bg-emerald-950/30 dark:border-emerald-800/40 dark:bg-emerald-950/30'
-          }`}
-        >
-          {overallStatus === 'critical' ? (
-            <AlertTriangle className="text-red-400 shrink-0" size={20} />
-          ) : (
-            <CheckCircle2 className="text-emerald-400 shrink-0" size={20} />
-          )}
-          <p
-            className={`font-medium text-sm ${
-              overallStatus === 'critical' ? 'text-red-300' : 'text-emerald-300'
-            }`}
-          >
-            {overallStatus === 'critical'
-              ? 'Vibes are off — one or more providers at critical usage'
-              : 'Vibes are good — all providers within limits'}
-          </p>
-        </div>
-      )}
-
       <div className="grid grid-cols-3 gap-4">
-        {/* Healthy */}
-        <div className="relative overflow-hidden rounded-xl border border-emerald-800/30 bg-emerald-950/30 p-4">
-          <p className="text-sm text-emerald-400/70">Healthy</p>
-          <p className="mt-1 text-3xl font-bold text-emerald-400">{anyLoading ? '—' : healthCounts.healthy}</p>
-          <div className="absolute bottom-3 right-3">
-            <ArcGaugeDecoration />
+        {(
+          [
+            {
+              label: 'Healthy',
+              value: healthCounts.healthy,
+              tooltip:
+                'Providers with peak utilization below 75% across all rate-limit windows — operating within safe limits.',
+              valueColor: 'text-emerald-400',
+              dotColor: 'bg-emerald-500',
+              cardBg: 'bg-emerald-950/20',
+              borderAccent: 'border-emerald-800/40',
+            },
+            {
+              label: 'Warning',
+              value: healthCounts.warning,
+              tooltip:
+                'Providers with peak utilization between 75–89% — approaching rate limits. Monitor closely.',
+              valueColor: 'text-amber-400',
+              dotColor: 'bg-amber-500',
+              cardBg: 'bg-amber-950/20',
+              borderAccent: 'border-amber-800/40',
+            },
+            {
+              label: 'Critical',
+              value: healthCounts.critical,
+              tooltip:
+                'Providers with peak utilization at or above 90% — at high risk of hitting rate limits.',
+              valueColor: 'text-red-400',
+              dotColor: 'bg-red-500',
+              cardBg: 'bg-red-950/20',
+              borderAccent: 'border-red-800/40',
+            },
+          ] as const
+        ).map(({ label, value, tooltip, valueColor, dotColor, cardBg, borderAccent }) => (
+          <div
+            key={label}
+            className={`flex flex-col gap-4 rounded-xl border ${borderAccent} ${cardBg} p-5`}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  {label}
+                </span>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button className="rounded text-muted-foreground/40 outline-none transition-colors hover:text-muted-foreground/80 focus-visible:ring-1 focus-visible:ring-ring">
+                    <Info size={13} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[200px] text-center">
+                  {tooltip}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <div>
+              <p className={`text-4xl font-bold tracking-tight ${valueColor}`}>
+                {anyLoading ? '—' : value}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {anyLoading ? '' : value === 1 ? 'provider' : 'providers'}
+              </p>
+            </div>
           </div>
-        </div>
+        ))}
 
-        {/* Warning */}
-        <div className="relative overflow-hidden rounded-xl border border-amber-800/30 bg-amber-950/30 p-4">
-          <p className="text-sm text-amber-400/70">Warning</p>
-          <p className="mt-1 text-3xl font-bold text-amber-400">{anyLoading ? '—' : healthCounts.warning}</p>
-          <div className="absolute bottom-3 right-3 opacity-50">
-            <AlertTriangle size={36} className="text-amber-500" />
-          </div>
-        </div>
-
-        {/* Critical */}
-        <div className="relative overflow-hidden rounded-xl border border-red-800/30 bg-red-950/30 p-4">
-          <p className="text-sm text-red-400/70">Critical</p>
-          <p className="mt-1 text-3xl font-bold text-red-400">{anyLoading ? '—' : healthCounts.critical}</p>
-          <div className="absolute bottom-3 right-3">
-            <CriticalBarDecoration />
-          </div>
-        </div>
-
-        {/* Most constrained window */}
-        <div className="col-span-3 flex items-center justify-between rounded-xl border bg-card p-4">
+        {/* Peak Utilization */}
+        <div className="col-span-3 flex items-center justify-between rounded-xl border border-border bg-card p-5">
           <div>
-            <p className="text-sm text-muted-foreground">Most constrained window</p>
-            <p className="mt-1 text-3xl font-bold text-foreground">
-              {anyLoading ? 'Loading…' : `${globalMaxUtilization}%`}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Peak Utilization
+              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button className="rounded text-muted-foreground/40 outline-none transition-colors hover:text-muted-foreground/80 focus-visible:ring-1 focus-visible:ring-ring">
+                    <Info size={13} />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[220px]">
+                  The highest utilization across all providers and rate-limit windows (5h and 7d). Represents your most constrained resource.
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <p className="mt-2 text-4xl font-bold tracking-tight text-foreground">
+              {anyLoading ? '—' : `${globalMaxUtilization}%`}
             </p>
+            <p className="mt-1 text-xs text-muted-foreground">most constrained window</p>
           </div>
           {!anyLoading && allReports.length > 0 && (
-            <div className="flex items-end pb-1 opacity-90">
+            <div className="flex items-end pb-1 opacity-60">
               <Sparkline />
             </div>
           )}

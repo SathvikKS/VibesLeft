@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Progress } from '@/components/ui/progress';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import type { UsageReport } from '@/bindings/usage';
 import {
-  Bot,
   Clock,
   CalendarDays,
   AlertTriangle,
@@ -33,23 +32,23 @@ export const getStatusInfo = (utilization: number) => {
   if (utilization >= 90)
     return {
       bg: 'bg-red-500',
-      text: 'text-red-600',
-      badgeBg: 'bg-red-50',
+      text: 'text-red-600 dark:text-red-400',
+      badgeBg: 'bg-red-50 dark:bg-red-950/50',
       icon: AlertTriangle,
       label: utilization >= 100 ? 'Limit reached' : 'Critical usage',
     };
   if (utilization >= 75)
     return {
       bg: 'bg-amber-500',
-      text: 'text-amber-600',
-      badgeBg: 'bg-amber-50',
+      text: 'text-amber-600 dark:text-amber-400',
+      badgeBg: 'bg-amber-50 dark:bg-amber-950/50',
       icon: Activity,
       label: 'Nearing limit',
     };
   return {
     bg: 'bg-emerald-500',
-    text: 'text-emerald-600',
-    badgeBg: 'bg-emerald-50',
+    text: 'text-emerald-600 dark:text-emerald-400',
+    badgeBg: 'bg-emerald-50 dark:bg-emerald-950/50',
     icon: CheckCircle2,
     label: 'Within limits',
   };
@@ -84,23 +83,17 @@ export const CacheIndicator = ({
     );
   }
 
-  let statusColor = 'text-slate-600';
-  let bgColor = 'bg-slate-100';
-  let borderColor = 'border-slate-200';
-  let dotColor = 'bg-slate-400';
+  let className = 'bg-emerald-950/40 border-emerald-800/50 text-emerald-400';
+  let dotClassName = 'bg-emerald-500';
   let isStale = false;
 
   if (diffMins >= 60) {
-    statusColor = 'text-red-700';
-    bgColor = 'bg-red-50';
-    borderColor = 'border-red-200';
-    dotColor = 'text-red-500';
+    className = 'bg-red-950/40 border-red-800/50 text-red-400';
+    dotClassName = 'text-red-400';
     isStale = true;
   } else if (diffMins >= 15) {
-    statusColor = 'text-amber-700';
-    bgColor = 'bg-amber-50';
-    borderColor = 'border-amber-200';
-    dotColor = 'text-amber-500';
+    className = 'bg-amber-950/40 border-amber-800/50 text-amber-400';
+    dotClassName = 'text-amber-400';
     isStale = true;
   }
 
@@ -116,13 +109,13 @@ export const CacheIndicator = ({
 
   return (
     <div
-      className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-md border ${bgColor} ${borderColor} ${statusColor}`}
+      className={`flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-md border ${className}`}
       title={`Data fetched at: ${exactDate}`}
     >
       {isStale ? (
-        <AlertTriangle size={12} className={dotColor} />
+        <AlertTriangle size={12} className={dotClassName} />
       ) : (
-        <div className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+        <div className={`w-1.5 h-1.5 rounded-full ${dotClassName}`} />
       )}
       {cached ? `Cached ${timeText}` : `Updated ${timeText}`}
     </div>
@@ -153,13 +146,13 @@ export const MetricRow = ({
   });
 
   return (
-    <div className="flex flex-col gap-2.5 p-4 rounded-xl bg-white border border-slate-100 shadow-sm transition-all hover:shadow-md">
+    <div className="flex flex-col gap-2.5 p-4 rounded-xl bg-card border border-border shadow-sm transition-all hover:shadow-md">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-md bg-slate-100 text-slate-600">
+          <div className="p-1.5 rounded-md bg-muted text-muted-foreground">
             <Icon size={16} />
           </div>
-          <span className="font-semibold text-slate-800 text-sm">{title}</span>
+          <span className="font-semibold text-foreground text-sm">{title}</span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -169,22 +162,22 @@ export const MetricRow = ({
             <StatusIcon size={12} />
             {statusInfo.label}
           </div>
-          <span className="font-bold text-slate-900">{utilization}%</span>
+          <span className="font-bold text-foreground">{utilization}%</span>
         </div>
       </div>
 
       <Progress value={utilization} indicatorClassName={statusInfo.bg} />
 
       <div className="flex items-center justify-between mt-1">
-        <span className="text-xs text-slate-500">{localResetTime}</span>
+        <span className="text-xs text-muted-foreground">{localResetTime}</span>
         <div
-          className="flex items-center gap-1.5 text-xs text-slate-500"
+          className="flex items-center gap-1.5 text-xs text-muted-foreground"
           title={`Resets at: ${exactResetDate}`}
         >
-          <Hourglass size={14} className="text-slate-400" />
+          <Hourglass size={14} className="text-muted-foreground" />
           <span>
             Resets{' '}
-            <span className="font-medium text-slate-700">{resetText}</span>
+            <span className="font-medium text-foreground">{resetText}</span>
           </span>
         </div>
       </div>
@@ -194,28 +187,8 @@ export const MetricRow = ({
 
 export const ProviderUsageCard = ({ report }: { report: UsageReport }) => {
   return (
-    <Card className="w-full max-w-md shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between pb-4 border-b border-slate-100">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-indigo-100">
-            <Bot size={24} />
-          </div>
-          <div className="flex flex-col items-start">
-            <CardTitle className="text-lg capitalize flex items-center gap-2">
-              {report.provider_name}
-              <CacheIndicator
-                fetchedAtMs={report.fetched_at_ms}
-                cached={report.cached}
-              />
-            </CardTitle>
-            <p className="text-sm text-slate-500 mt-0.5">
-              API Consumption Metrics
-            </p>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="pt-6 flex flex-col gap-4 bg-slate-50/50 rounded-b-xl">
+    <Card className="w-full max-w-2xl mx-auto shadow-sm">
+      <CardContent className="p-6 flex flex-col gap-4 bg-muted/30 rounded-xl">
         <MetricRow title="5-Hour Window" icon={Clock} data={report.five_hour} />
         <MetricRow
           title="7-Day Window"
