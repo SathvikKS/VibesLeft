@@ -5,9 +5,8 @@ use serde::Deserialize;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use super::{
-    CachedCredentials, CredsCache, UsageConnector, UsageMetadata, UsageReport, UsageWindow,
-};
+use super::token_manager::{CredentialSource, TokenManager};
+use super::{CachedCredentials, UsageConnector, UsageMetadata, UsageReport, UsageWindow};
 use crate::error::AppError;
 
 // ---------------------------------------------------------------------------
@@ -52,7 +51,7 @@ struct AntigravityAuth {
 struct AntigravityToken {
     access_token: String,
     #[serde(default)]
-    expiry: Option<String>, // RFC3339
+    expiry: Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
 }
@@ -61,29 +60,17 @@ struct AntigravityToken {
 struct RefreshTokenResponse {
     access_token: String,
     expires_in: i64,
+    #[serde(default)]
+    refresh_token: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
-// Connector
+// Credential source
 // ---------------------------------------------------------------------------
 
-pub struct AntigravityConnector {
-    creds: CredsCache,
-    app: AppHandle,
-}
+struct AntigravityCredSource;
 
-impl AntigravityConnector {
-    pub fn new(app: AppHandle) -> Result<Self, AppError> {
-        Ok(Self {
-            creds: CredsCache::new("antigravity"),
-            app,
-        })
-    }
-
-    // -----------------------------------------------------------------------
-    // Credentials source (macOS Keychain — no OAuth refresh)
-    // -----------------------------------------------------------------------
-
+impl AntigravityCredSource {
     const KEYCHAIN_SERVICE: &'static str = "gemini";
     const KEYCHAIN_ACCOUNT: &'static str = "antigravity";
     const GOKEYRING_PREFIX: &'static str = "go-keyring-base64:";
@@ -91,7 +78,9 @@ impl AntigravityConnector {
 
     fn oauth_client_id() -> Result<String, AppError> {
         #[cfg(not(debug_assertions))]
-        { Ok(env!("ANTIGRAVITY_CLIENT_ID").to_string()) }
+        {
+            Ok(env!("ANTIGRAVITY_CLIENT_ID").to_string())
+        }
         #[cfg(debug_assertions)]
         {
             std::env::var("ANTIGRAVITY_CLIENT_ID")
@@ -101,7 +90,9 @@ impl AntigravityConnector {
 
     fn oauth_client_secret() -> Result<String, AppError> {
         #[cfg(not(debug_assertions))]
-        { Ok(env!("ANTIGRAVITY_CLIENT_SECRET").to_string()) }
+        {
+            Ok(env!("ANTIGRAVITY_CLIENT_SECRET").to_string())
+        }
         #[cfg(debug_assertions)]
         {
             std::env::var("ANTIGRAVITY_CLIENT_SECRET")
@@ -109,29 +100,6 @@ impl AntigravityConnector {
         }
     }
 
-    /// Read + decode the source `gemini`/`antigravity` keychain entry.
-    fn fetch_credentials_from_source(&self) -> Result<CachedCredentials, AppError> {
-        let entry = keyring::Entry::new(Self::KEYCHAIN_SERVICE, Self::KEYCHAIN_ACCOUNT)
-            .map_err(|e| AppError::Internal(format!("antigravity keychain entry failed: {e}")))?;
-
-        let raw = match entry.get_password() {
-            Ok(pw) => pw,
-            Err(keyring::Error::NoEntry) => {
-                return Err(AppError::ReauthRequired(
-                    "no antigravity credentials in keychain — re-authenticate with the Antigravity CLI"
-                        .into(),
-                ));
-            }
-            Err(e) => {
-                return Err(AppError::Internal(format!(
-                    "antigravity keychain access failed: {e}"
-                )));
-            }
-        };
-        Self::parse_credentials(&raw)
-    }
-
-    /// Pure: go-keyring-base64 prefix strip + decode + nested-JSON parse + expiry → ms.
     fn parse_credentials(raw: &str) -> Result<CachedCredentials, AppError> {
         let json = match raw.strip_prefix(Self::GOKEYRING_PREFIX) {
             Some(b64) => {
@@ -161,34 +129,43 @@ impl AntigravityConnector {
         Ok(CachedCredentials {
             token: auth.token.access_token,
             expires_at_ms,
-            refresh_token: auth.token.refresh_token,
+            refresh_token: auth.token.refresh_token.unwrap_or_default(),
         })
     }
+}
 
-    /// Cache hit (fresh) → return.
-    /// Within 15-min expiry window → proactively refresh via Google OAuth2.
-    /// Cache miss or refresh failure → fall back to Antigravity keychain.
-    async fn get_valid_token(&self) -> Result<String, AppError> {
-        if let Some(cached) = self.creds.get_raw() {
-            let ttl_ms = cached.expires_at_ms - now_ms();
-            if ttl_ms > PROACTIVE_REFRESH_MS {
-                return Ok(cached.token);
-            }
-            if let Some(rt) = &cached.refresh_token {
-                if let Ok(new_creds) = self.do_refresh(rt).await {
-                    let _ = self.creds.put(&new_creds);
-                    return Ok(new_creds.token);
-                }
-            }
-        }
-        let fresh = self.fetch_credentials_from_source()?;
-        if fresh.expires_at_ms > 0 {
-            let _ = self.creds.put(&fresh);
-        }
-        Ok(fresh.token)
+#[async_trait]
+impl CredentialSource for AntigravityCredSource {
+    fn provider(&self) -> &'static str {
+        "antigravity"
     }
 
-    async fn do_refresh(&self, refresh_token: &str) -> Result<CachedCredentials, AppError> {
+    fn supports_refresh(&self) -> bool {
+        true
+    }
+
+    fn fetch_from_source(&self) -> Result<CachedCredentials, AppError> {
+        let entry = keyring::Entry::new(Self::KEYCHAIN_SERVICE, Self::KEYCHAIN_ACCOUNT)
+            .map_err(|e| AppError::Internal(format!("antigravity keychain entry failed: {e}")))?;
+
+        let raw = match entry.get_password() {
+            Ok(pw) => pw,
+            Err(keyring::Error::NoEntry) => {
+                return Err(AppError::ReauthRequired(
+                    "no antigravity credentials in keychain — re-authenticate with the Antigravity CLI"
+                        .into(),
+                ));
+            }
+            Err(e) => {
+                return Err(AppError::Internal(format!(
+                    "antigravity keychain access failed: {e}"
+                )));
+            }
+        };
+        Self::parse_credentials(&raw)
+    }
+
+    async fn refresh(&self, rt: &str) -> Result<CachedCredentials, AppError> {
         let client = reqwest::Client::new();
         let client_id = Self::oauth_client_id()?;
         let client_secret = Self::oauth_client_secret()?;
@@ -199,7 +176,7 @@ impl AntigravityConnector {
                 ("client_id", client_id.as_str()),
                 ("client_secret", client_secret.as_str()),
                 ("grant_type", "refresh_token"),
-                ("refresh_token", refresh_token),
+                ("refresh_token", rt),
             ])
             .send()
             .await?;
@@ -211,14 +188,34 @@ impl AntigravityConnector {
             ));
         }
         if !status.is_success() {
-            return Err(AppError::Internal(format!("token refresh failed: {status}")));
+            return Err(AppError::Internal(format!(
+                "token refresh failed: {status}"
+            )));
         }
 
         let body: RefreshTokenResponse = resp.json().await?;
         Ok(CachedCredentials {
             token: body.access_token,
             expires_at_ms: now_ms() + body.expires_in * 1_000,
-            refresh_token: Some(refresh_token.to_string()),
+            refresh_token: body.refresh_token.unwrap_or_else(|| rt.to_string()),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connector
+// ---------------------------------------------------------------------------
+
+pub struct AntigravityConnector {
+    tokens: TokenManager<AntigravityCredSource>,
+    app: AppHandle,
+}
+
+impl AntigravityConnector {
+    pub fn new(app: AppHandle) -> Result<Self, AppError> {
+        Ok(Self {
+            tokens: TokenManager::new(AntigravityCredSource),
+            app,
         })
     }
 
@@ -248,7 +245,7 @@ impl AntigravityConnector {
     async fn get_usage_stats(&self, token: &str) -> Result<QuotaSummaryResponse, AppError> {
         let client = reqwest::Client::new();
 
-        // 1. LoadCodeAssist → get project name
+        // 1. LoadCodeAssist -> get project name
         let resp = client
             .post("https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
             .header("User-Agent", "antigravity/cli/1.0.6 darwin/arm64")
@@ -274,7 +271,7 @@ impl AntigravityConnector {
 
         let load_resp: LoadCodeAssistResponse = resp.json().await.map_err(AppError::from)?;
 
-        // 2. RetrieveUserQuotaSummary → get buckets
+        // 2. RetrieveUserQuotaSummary -> get buckets
         let body = serde_json::json!({ "project": load_resp.cloudaicompanion_project });
         let resp = client
             .post("https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
@@ -366,7 +363,6 @@ impl AntigravityConnector {
 }
 
 const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
-const PROACTIVE_REFRESH_MS: i64 = 15 * 60 * 1_000;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -396,7 +392,7 @@ impl UsageConnector for AntigravityConnector {
         let start = Instant::now();
 
         let _t1 = Instant::now();
-        let token = self.get_valid_token().await?;
+        let token = self.tokens.get_valid_token().await?;
         eprintln!(
             "[timing] antigravity::generate_report get_valid_token = {:?}",
             _t1.elapsed()
@@ -426,9 +422,7 @@ impl UsageConnector for AntigravityConnector {
             }
 
             Err(AppError::Unauthorized(_)) => {
-                let _ = self.creds.clear();
-
-                let token = match self.get_valid_token().await {
+                let token = match self.tokens.recover_from_rejection().await {
                     Ok(t) => t,
                     Err(AppError::ReauthRequired(msg)) => {
                         return Err(AppError::ReauthRequired(msg));
@@ -482,16 +476,3 @@ impl UsageConnector for AntigravityConnector {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_go_keyring_base64_blob() {
-        let raw = "go-keyring-base64:eyJ0b2tlbiI6eyJhY2Nlc3NfdG9rZW4iOiJ5YTI5LmEwQVQzb05aX0V2clRKWlBwN3B0R2JDdHVBRGtISDZsY21veVUtTENXM2pSbzQ2LXZZRk83Wk43UEd0em1Zc3lWdXhlYnp5N2hIZWZOcXNkX3llSE9YOUVOLVdRYUZuRmxKZF8xcVc4YjZ5c1ZKWTZmc3k5Y0hKa2pXZndNNXpTT3hNUl9Sc0g5YXJJU3FpZTFDY0hDODBQWmpIWUFLeTdRckdqU2kwZGR1N2w3SmJLNXN1UHFwdUt1Q0dveHEtZl9zV2ppUDg3cTg3REx1YUNnWUtBZDhTQVJZU0ZRSEdYMk1pSHBiTTFsMWpxWjY5bEhMVnhuSE9RZzAyMTEiLCJ0b2tlbl90eXBlIjoiQmVhcmVyIiwicmVmcmVzaF90b2tlbiI6IjEvLzBnM3dQeVpFZnBXMnlDZ1lJQVJBQUdCQVNOd0YtTDlJckdPM3plNDZsd2N6TVQtOENuMlRqZmJhVW1UT3E4N20zcGJwNXpwaW9zaEFQTUdvTll1SWFtNWV3VEpETnc5QTFKQ2siLCJleHBpcnkiOiIyMDI2LTA2LTA5VDE4OjQxOjA3LjU2OTMxNCswNTozMCJ9LCJhdXRoX21ldGhvZCI6ImNvbnN1bWVyIn0=";
-        let creds = AntigravityConnector::parse_credentials(raw).unwrap();
-        assert!(creds.token.starts_with("ya29."));
-        assert!(creds.expires_at_ms > 0);
-        assert!(creds.refresh_token.is_some());
-    }
-}

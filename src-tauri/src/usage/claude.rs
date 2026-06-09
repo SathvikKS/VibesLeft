@@ -5,8 +5,8 @@ use serde::Deserialize;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use super::{CachedCredentials, CredsCache};
-use super::{UsageConnector, UsageReport, UsageWindow};
+use super::token_manager::{CredentialSource, TokenManager};
+use super::{CachedCredentials, UsageConnector, UsageReport, UsageWindow};
 use crate::error::AppError;
 
 // ---------------------------------------------------------------------------
@@ -41,29 +41,33 @@ struct ClaudeAiOauth {
     access_token: Option<String>,
     #[serde(rename = "expiresAt")]
     expires_at: Option<i64>,
+    #[serde(rename = "refreshToken")]
+    refresh_token: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
-// Connector
+// Refresh response type
 // ---------------------------------------------------------------------------
 
-pub struct ClaudeConnector {
-    creds: CredsCache,
-    app: AppHandle,
+#[derive(Deserialize)]
+struct ClaudeRefreshResponse {
+    access_token: String,
+    expires_in: i64,
+    #[serde(default)]
+    refresh_token: Option<String>,
 }
 
-impl ClaudeConnector {
-    pub fn new(app: AppHandle) -> Result<Self, AppError> {
-        Ok(Self {
-            creds: CredsCache::new("claude"),
-            app,
-        })
-    }
+const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_SCOPE: &str =
+    "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
-    // -----------------------------------------------------------------------
-    // Credentials source (keychain → file)
-    // -----------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Credential source
+// ---------------------------------------------------------------------------
 
+struct ClaudeCredSource;
+
+impl ClaudeCredSource {
     fn try_keychain(service: &str, account: &str) -> Result<Option<String>, AppError> {
         let entry = keyring::Entry::new(service, account)
             .map_err(|e| AppError::Internal(format!("claude keychain entry failed: {e}")))?;
@@ -76,14 +80,14 @@ impl ClaudeConnector {
         }
     }
 
-    fn parse_auth_file(&self, contents: &str) -> Result<CachedCredentials, AppError> {
-        let creds: CredentialsFile = serde_json::from_str(contents)?;
+    fn parse_auth_file(contents: &str) -> Result<CachedCredentials, AppError> {
+        let creds: CredentialsFile = serde_json::from_str(contents).map_err(AppError::from)?;
         let oauth = creds.claude_ai_oauth.ok_or_else(|| {
             AppError::ReauthRequired("missing claudeAiOauth in credentials".into())
         })?;
-        let token = oauth.access_token.ok_or_else(|| {
-            AppError::ReauthRequired("missing accessToken in credentials".into())
-        })?;
+        let token = oauth
+            .access_token
+            .ok_or_else(|| AppError::ReauthRequired("missing accessToken in credentials".into()))?;
         if token.is_empty() {
             return Err(AppError::ReauthRequired(
                 "empty accessToken in credentials".into(),
@@ -93,14 +97,13 @@ impl ClaudeConnector {
         Ok(CachedCredentials {
             token,
             expires_at_ms,
-            refresh_token: None,
+            refresh_token: oauth.refresh_token.unwrap_or_default(),
         })
     }
 
-    fn read_auth_file(&self) -> Result<String, AppError> {
-        let home = dirs::home_dir().ok_or_else(|| {
-            AppError::Internal("unable to determine home directory".into())
-        })?;
+    fn read_auth_file() -> Result<String, AppError> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| AppError::Internal("unable to determine home directory".into()))?;
 
         let paths = [
             home.join(".claude/.credentials.json"),
@@ -119,15 +122,14 @@ impl ClaudeConnector {
         ))
     }
 
-    fn fetch_credentials_from_source(&self) -> Result<CachedCredentials, AppError> {
+    fn fetch_credentials_from_source() -> Result<CachedCredentials, AppError> {
         let user = std::env::var("USER").unwrap_or_else(|_| "claude".to_string());
 
         let mut source_errors: Vec<String> = Vec::new();
 
-        // Try keychain sources first
         for (service, account) in [("Claude Code-credentials", &user), ("Claude Code", &user)] {
             match Self::try_keychain(service, account) {
-                Ok(Some(contents)) => return self.parse_auth_file(&contents),
+                Ok(Some(contents)) => return Self::parse_auth_file(&contents),
                 Ok(None) => continue,
                 Err(e) => {
                     source_errors.push(format!("keychain({service}/{account}): {e}"));
@@ -136,10 +138,9 @@ impl ClaudeConnector {
             }
         }
 
-        // Fall back to file
-        match self.read_auth_file() {
-            Ok(contents) => return self.parse_auth_file(&contents),
-            Err(AppError::Unauthorized(_)) => { /* file not found — not an access error */ }
+        match Self::read_auth_file() {
+            Ok(contents) => return Self::parse_auth_file(&contents),
+            Err(AppError::Unauthorized(_)) => {}
             Err(e) => {
                 source_errors.push(format!("file: {e}"));
             }
@@ -157,36 +158,77 @@ impl ClaudeConnector {
             )))
         }
     }
+}
 
-    // -----------------------------------------------------------------------
-    // Token lifecycle with Stronghold-backed cache
-    // -----------------------------------------------------------------------
+#[async_trait]
+impl CredentialSource for ClaudeCredSource {
+    fn provider(&self) -> &'static str {
+        "claude"
+    }
 
-    fn get_valid_token(&self) -> Result<String, AppError> {
-        let start = Instant::now();
+    fn supports_refresh(&self) -> bool {
+        true
+    }
 
-        // Try cache first
-        let t0 = Instant::now();
-        if let Some(cached) = self.creds.get() {
-            eprintln!("[timing] claude::get_valid_token cache_hit = {:?}", t0.elapsed());
-            eprintln!("[timing] claude::get_valid_token (total cached) = {:?}", start.elapsed());
-            return Ok(cached.token);
+    fn fetch_from_source(&self) -> Result<CachedCredentials, AppError> {
+        Self::fetch_credentials_from_source()
+    }
+
+    async fn refresh(&self, rt: &str) -> Result<CachedCredentials, AppError> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .post("https://platform.claude.com/v1/oauth/token")
+            .header("Accept", "application/json, text/plain, */*")
+            .header("User-Agent", "axios/1.15.2")
+            .json(&serde_json::json!({
+                "grant_type": "refresh_token",
+                "refresh_token": rt,
+                "client_id": CLAUDE_CLIENT_ID,
+                "scope": CLAUDE_SCOPE,
+            }))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("token refresh request failed: {e}")))?;
+
+        let status = resp.status();
+        if status.as_u16() == 400 || status.as_u16() == 401 {
+            return Err(AppError::ReauthRequired(
+                "refresh token rejected — run `claude login` in your terminal".into(),
+            ));
         }
-        eprintln!("[timing] claude::get_valid_token cache_miss = {:?}", t0.elapsed());
-
-        let t1 = Instant::now();
-        let fresh = self.fetch_credentials_from_source()?;
-        eprintln!("[timing] claude::get_valid_token fetch_source = {:?}", t1.elapsed());
-
-        // Only persist to Stronghold when we have a real expiry
-        if fresh.expires_at_ms > 0 {
-            let t2 = Instant::now();
-            let _ = self.creds.put(&fresh);
-            eprintln!("[timing] claude::get_valid_token creds_put = {:?}", t2.elapsed());
+        if !status.is_success() {
+            return Err(AppError::Internal(format!(
+                "token refresh failed: {status}"
+            )));
         }
 
-        eprintln!("[timing] claude::get_valid_token (total fetch) = {:?}", start.elapsed());
-        Ok(fresh.token)
+        let body: ClaudeRefreshResponse = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("token refresh parse failed: {e}")))?;
+        Ok(CachedCredentials {
+            token: body.access_token,
+            expires_at_ms: now_ms() + body.expires_in * 1_000,
+            refresh_token: body.refresh_token.unwrap_or_else(|| rt.to_string()),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connector
+// ---------------------------------------------------------------------------
+
+pub struct ClaudeConnector {
+    tokens: TokenManager<ClaudeCredSource>,
+    app: AppHandle,
+}
+
+impl ClaudeConnector {
+    pub fn new(app: AppHandle) -> Result<Self, AppError> {
+        Ok(Self {
+            tokens: TokenManager::new(ClaudeCredSource),
+            app,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -222,12 +264,17 @@ impl ClaudeConnector {
             .header("anthropic-beta", "oauth-2025-04-20")
             .send()
             .await?;
-        eprintln!("[timing] claude::http_request (send) = {:?}", start.elapsed());
+        eprintln!(
+            "[timing] claude::http_request (send) = {:?}",
+            start.elapsed()
+        );
 
         let status = resp.status();
 
         if status.is_client_error() {
-            return Err(AppError::Unauthorized(format!("API rejected the token ({status})")));
+            return Err(AppError::Unauthorized(format!(
+                "API rejected the token ({status})"
+            )));
         }
 
         if !status.is_success() {
@@ -235,7 +282,10 @@ impl ClaudeConnector {
         }
 
         let result = resp.json().await.map_err(AppError::from);
-        eprintln!("[timing] claude::http_request (total) = {:?}", start.elapsed());
+        eprintln!(
+            "[timing] claude::http_request (total) = {:?}",
+            start.elapsed()
+        );
         result
     }
 
@@ -273,7 +323,6 @@ impl UsageConnector for ClaudeConnector {
     }
 
     async fn generate_report(&self, force_refresh: bool) -> Result<UsageReport, AppError> {
-        // Serve from cache if fresh and not a forced refresh
         if !force_refresh {
             if let Some(cached) = self.read_usage_cache() {
                 if now_ms() - cached.fetched_at_ms < CACHE_TTL_MS {
@@ -287,57 +336,65 @@ impl UsageConnector for ClaudeConnector {
 
         let start = Instant::now();
 
-        // 1. Get a valid token (cached → source)
         let _t1 = Instant::now();
-        let token = self.get_valid_token()?;
-        eprintln!("[timing] claude::generate_report get_valid_token = {:?}", _t1.elapsed());
+        let token = self.tokens.get_valid_token().await?;
+        eprintln!(
+            "[timing] claude::generate_report get_valid_token = {:?}",
+            _t1.elapsed()
+        );
 
-        // 2. Try the live API
         let t2 = Instant::now();
         let result = self.get_usage_stats(&token).await;
-        eprintln!("[timing] claude::generate_report get_usage_stats = {:?}", t2.elapsed());
+        eprintln!(
+            "[timing] claude::generate_report get_usage_stats = {:?}",
+            t2.elapsed()
+        );
 
         match result {
             Ok(stats) => {
                 let t3 = Instant::now();
                 let report = Self::map_stats(stats);
                 self.write_usage_cache(&report);
-                eprintln!("[timing] claude::generate_report write_cache = {:?}", t3.elapsed());
-                eprintln!("[timing] claude::generate_report (total, success) = {:?}", start.elapsed());
+                eprintln!(
+                    "[timing] claude::generate_report write_cache = {:?}",
+                    t3.elapsed()
+                );
+                eprintln!(
+                    "[timing] claude::generate_report (total, success) = {:?}",
+                    start.elapsed()
+                );
                 Ok(report)
             }
 
             Err(AppError::Unauthorized(_)) => {
-                // 3. Token rejected — invalidate Stronghold cache and retry once
                 let t3 = Instant::now();
-                let _ = self.creds.clear();
-                eprintln!("[timing] claude::generate_report creds_clear = {:?}", t3.elapsed());
-
-                let t4 = Instant::now();
-                let token = match self.fetch_credentials_from_source() {
-                    Ok(fresh) => {
-                        if fresh.expires_at_ms > 0 {
-                            let _ = self.creds.put(&fresh);
-                        }
-                        fresh.token
-                    }
+                let token = match self.tokens.recover_from_rejection().await {
+                    Ok(t) => t,
                     Err(AppError::ReauthRequired(msg)) => {
                         return Err(AppError::ReauthRequired(msg));
                     }
                     Err(e) => return Err(e),
                 };
-                eprintln!("[timing] claude::generate_report retry_fetch = {:?}", t4.elapsed());
+                eprintln!(
+                    "[timing] claude::generate_report recover = {:?}",
+                    t3.elapsed()
+                );
 
-                // Retry once
                 match self.get_usage_stats(&token).await {
                     Ok(stats) => {
                         let report = Self::map_stats(stats);
                         self.write_usage_cache(&report);
-                        eprintln!("[timing] claude::generate_report (total, retry ok) = {:?}", start.elapsed());
+                        eprintln!(
+                            "[timing] claude::generate_report (total, retry ok) = {:?}",
+                            start.elapsed()
+                        );
                         Ok(report)
                     }
                     Err(AppError::Unauthorized(_)) => {
-                        eprintln!("[timing] claude::generate_report (total, reauth) = {:?}", start.elapsed());
+                        eprintln!(
+                            "[timing] claude::generate_report (total, reauth) = {:?}",
+                            start.elapsed()
+                        );
                         Err(AppError::ReauthRequired(
                             "credentials expired — run `claude login` in your terminal".into(),
                         ))
@@ -348,9 +405,11 @@ impl UsageConnector for ClaudeConnector {
             }
 
             Err(AppError::Internal(msg)) => {
-                // 4. Network / 5xx error — fall back to cached usage
                 if let Some(cached) = self.read_usage_cache() {
-                    eprintln!("[timing] claude::generate_report (total, cached fallback) = {:?}", start.elapsed());
+                    eprintln!(
+                        "[timing] claude::generate_report (total, cached fallback) = {:?}",
+                        start.elapsed()
+                    );
                     Ok(UsageReport {
                         cached: true,
                         ..cached

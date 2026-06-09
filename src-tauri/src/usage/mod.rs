@@ -9,6 +9,7 @@ mod antigravity;
 mod claude;
 mod codex;
 mod creds_cache;
+mod token_manager;
 
 pub(super) use creds_cache::{CachedCredentials, CredsCache};
 

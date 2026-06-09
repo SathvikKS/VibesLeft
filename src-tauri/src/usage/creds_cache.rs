@@ -1,18 +1,15 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-const SAFETY_OFFSET_MS: i64 = 5 * 60 * 1000;
 const SERVICE: &str = "vibes-left-token-cache";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedCredentials {
     pub token: String,
     pub expires_at_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: String,
 }
 
 /// Token cache backed by the OS keychain in release builds.
@@ -25,16 +22,6 @@ pub struct CredsCache {
 impl CredsCache {
     pub fn new(provider: &'static str) -> Self {
         Self { provider }
-    }
-
-    pub fn get(&self) -> Option<CachedCredentials> {
-        let json = self.read_raw().ok()??;
-        let creds: CachedCredentials = serde_json::from_str(&json).ok()?;
-        if now_ms() < creds.expires_at_ms - SAFETY_OFFSET_MS {
-            Some(creds)
-        } else {
-            None
-        }
     }
 
     pub fn get_raw(&self) -> Option<CachedCredentials> {
@@ -116,11 +103,4 @@ impl CredsCache {
     fn dev_path(&self) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("{SERVICE}-{}.json", self.provider))
     }
-}
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }

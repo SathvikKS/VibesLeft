@@ -62,9 +62,8 @@ impl CodexConnector {
     // -----------------------------------------------------------------------
 
     fn read_auth_file(&self) -> Result<(String, String), AppError> {
-        let home = dirs::home_dir().ok_or_else(|| {
-            AppError::Internal("unable to determine home directory".into())
-        })?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| AppError::Internal("unable to determine home directory".into()))?;
 
         let path = home.join(".codex/auth.json");
         let contents = std::fs::read_to_string(&path).map_err(|e| match e.kind() {
@@ -121,12 +120,17 @@ impl CodexConnector {
             .header("chatgpt-account-id", account_id)
             .send()
             .await?;
-        eprintln!("[timing] codex::http_request (send) = {:?}", _start.elapsed());
+        eprintln!(
+            "[timing] codex::http_request (send) = {:?}",
+            _start.elapsed()
+        );
 
         let status = resp.status();
 
         if status.is_client_error() {
-            return Err(AppError::Unauthorized(format!("API rejected the token ({status})")));
+            return Err(AppError::Unauthorized(format!(
+                "API rejected the token ({status})"
+            )));
         }
 
         if !status.is_success() {
@@ -134,24 +138,23 @@ impl CodexConnector {
         }
 
         let result = resp.json().await.map_err(AppError::from);
-        eprintln!("[timing] codex::http_request (total) = {:?}", _start.elapsed());
+        eprintln!(
+            "[timing] codex::http_request (total) = {:?}",
+            _start.elapsed()
+        );
         result
     }
 
     fn map_stats(stats: CodexUsageResponse) -> UsageReport {
-        let five_hour_reset = chrono::DateTime::from_timestamp(
-            stats.rate_limit.primary_window.reset_at,
-            0,
-        )
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| "unknown".into());
+        let five_hour_reset =
+            chrono::DateTime::from_timestamp(stats.rate_limit.primary_window.reset_at, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into());
 
-        let seven_day_reset = chrono::DateTime::from_timestamp(
-            stats.rate_limit.secondary_window.reset_at,
-            0,
-        )
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| "unknown".into());
+        let seven_day_reset =
+            chrono::DateTime::from_timestamp(stats.rate_limit.secondary_window.reset_at, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| "unknown".into());
 
         UsageReport {
             provider_name: "codex".into(),
