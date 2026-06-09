@@ -64,23 +64,30 @@ impl ClaudeConnector {
     // Credentials source (keychain → file)
     // -----------------------------------------------------------------------
 
-    fn try_keychain(service: &str, account: &str) -> Option<String> {
-        keyring::Entry::new(service, account)
-            .ok()?
-            .get_password()
-            .ok()
+    fn try_keychain(service: &str, account: &str) -> Result<Option<String>, AppError> {
+        let entry = keyring::Entry::new(service, account)
+            .map_err(|e| AppError::Internal(format!("claude keychain entry failed: {e}")))?;
+        match entry.get_password() {
+            Ok(pw) => Ok(Some(pw)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(AppError::Internal(format!(
+                "claude keychain access failed: {e}"
+            ))),
+        }
     }
 
     fn parse_auth_file(&self, contents: &str) -> Result<CachedCredentials, AppError> {
         let creds: CredentialsFile = serde_json::from_str(contents)?;
-        let oauth = creds
-            .claude_ai_oauth
-            .ok_or_else(|| AppError::Unauthorized("missing claudeAiOauth in credentials".into()))?;
+        let oauth = creds.claude_ai_oauth.ok_or_else(|| {
+            AppError::ReauthRequired("missing claudeAiOauth in credentials".into())
+        })?;
         let token = oauth.access_token.ok_or_else(|| {
-            AppError::Unauthorized("missing accessToken in credentials".into())
+            AppError::ReauthRequired("missing accessToken in credentials".into())
         })?;
         if token.is_empty() {
-            return Err(AppError::Unauthorized("empty accessToken in credentials".into()));
+            return Err(AppError::ReauthRequired(
+                "empty accessToken in credentials".into(),
+            ));
         }
         let expires_at_ms = oauth.expires_at.unwrap_or(0);
         Ok(CachedCredentials {
@@ -114,16 +121,39 @@ impl ClaudeConnector {
     fn fetch_credentials_from_source(&self) -> Result<CachedCredentials, AppError> {
         let user = std::env::var("USER").unwrap_or_else(|_| "claude".to_string());
 
-        let blob = Self::try_keychain("Claude Code-credentials", &user)
-            .or_else(|| Self::try_keychain("Claude Code", &user))
-            .or_else(|| self.read_auth_file().ok());
+        let mut source_errors: Vec<String> = Vec::new();
 
-        match blob {
-            Some(contents) => self.parse_auth_file(&contents),
-            None => Err(AppError::ReauthRequired(
+        // Try keychain sources first
+        for (service, account) in [("Claude Code-credentials", &user), ("Claude Code", &user)] {
+            match Self::try_keychain(service, account) {
+                Ok(Some(contents)) => return self.parse_auth_file(&contents),
+                Ok(None) => continue,
+                Err(e) => {
+                    source_errors.push(format!("keychain({service}/{account}): {e}"));
+                    continue;
+                }
+            }
+        }
+
+        // Fall back to file
+        match self.read_auth_file() {
+            Ok(contents) => return self.parse_auth_file(&contents),
+            Err(AppError::Unauthorized(_)) => { /* file not found — not an access error */ }
+            Err(e) => {
+                source_errors.push(format!("file: {e}"));
+            }
+        }
+
+        if source_errors.is_empty() {
+            Err(AppError::ReauthRequired(
                 "no credentials found in keychain or file — run `claude login` in your terminal"
                     .into(),
-            )),
+            ))
+        } else {
+            Err(AppError::Internal(format!(
+                "credentials unavailable: {}",
+                source_errors.join("; ")
+            )))
         }
     }
 
@@ -150,7 +180,7 @@ impl ClaudeConnector {
         // Only persist to Stronghold when we have a real expiry
         if fresh.expires_at_ms > 0 {
             let t2 = Instant::now();
-            self.creds.put(&fresh)?;
+            let _ = self.creds.put(&fresh);
             eprintln!("[timing] claude::get_valid_token creds_put = {:?}", t2.elapsed());
         }
 

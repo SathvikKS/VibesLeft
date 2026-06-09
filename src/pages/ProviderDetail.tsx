@@ -1,5 +1,6 @@
 import { useUsageReport } from '@/hooks/useUsageReport';
 import { ProviderUsageCard, CacheIndicator } from '@/components/providers/ProviderUsageCard';
+import { UsageError } from '@/components/providers/UsageError';
 import { Button } from '@/components/ui/button';
 import { RefreshCw, ArrowLeft } from 'lucide-react';
 import type { Page } from '@/App';
@@ -51,26 +52,7 @@ export const ProviderDetail = ({ id, setPage }: ProviderDetailProps) => {
         </Button>
       </div>
 
-      {error && (
-        <div
-          className={`rounded-lg border p-3 text-sm ${
-            error.kind === 'ReauthRequired'
-              ? 'border-amber-300 bg-amber-50 text-amber-800'
-              : 'border-red-300 bg-red-50 text-red-800'
-          }`}
-        >
-          {error.kind === 'ReauthRequired' ? (
-            <>
-              <strong>Re-authentication required</strong>
-              <p className="mt-1">{error.message}</p>
-            </>
-          ) : (
-            <>
-              {error.kind}: {error.message}
-            </>
-          )}
-        </div>
-      )}
+      {error && <UsageError error={error} />}
 
       {loading && !report && (
         <div className="flex items-center justify-center py-12">

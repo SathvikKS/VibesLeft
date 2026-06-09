@@ -82,15 +82,23 @@ impl AntigravityConnector {
 
     /// Read + decode the source `gemini`/`antigravity` keychain entry.
     fn fetch_credentials_from_source(&self) -> Result<CachedCredentials, AppError> {
-        let raw = keyring::Entry::new(Self::KEYCHAIN_SERVICE, Self::KEYCHAIN_ACCOUNT)
-            .ok()
-            .and_then(|e| e.get_password().ok())
-            .ok_or_else(|| {
-                AppError::ReauthRequired(
+        let entry = keyring::Entry::new(Self::KEYCHAIN_SERVICE, Self::KEYCHAIN_ACCOUNT)
+            .map_err(|e| AppError::Internal(format!("antigravity keychain entry failed: {e}")))?;
+
+        let raw = match entry.get_password() {
+            Ok(pw) => pw,
+            Err(keyring::Error::NoEntry) => {
+                return Err(AppError::ReauthRequired(
                     "no antigravity credentials in keychain — re-authenticate with the Antigravity CLI"
                         .into(),
-                )
-            })?;
+                ));
+            }
+            Err(e) => {
+                return Err(AppError::Internal(format!(
+                    "antigravity keychain access failed: {e}"
+                )));
+            }
+        };
         Self::parse_credentials(&raw)
     }
 
@@ -134,7 +142,7 @@ impl AntigravityConnector {
         }
         let fresh = self.fetch_credentials_from_source()?;
         if fresh.expires_at_ms > 0 {
-            self.creds.put(&fresh)?;
+            let _ = self.creds.put(&fresh);
         }
         Ok(fresh.token)
     }

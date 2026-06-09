@@ -67,8 +67,11 @@ impl CodexConnector {
         })?;
 
         let path = home.join(".codex/auth.json");
-        let contents = std::fs::read_to_string(&path).map_err(|_| {
-            AppError::ReauthRequired("no credentials found at ~/.codex/auth.json".into())
+        let contents = std::fs::read_to_string(&path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                AppError::ReauthRequired("no credentials found at ~/.codex/auth.json".into())
+            }
+            _ => AppError::Internal(format!("could not read ~/.codex/auth.json: {e}")),
         })?;
 
         let auth: CodexAuthFile = serde_json::from_str(&contents)?;

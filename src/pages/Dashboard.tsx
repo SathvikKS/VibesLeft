@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useRef } from 'react';
 import { useUsageReport } from '@/hooks/useUsageReport';
 import { ENABLED_PROVIDERS } from '@/providers.config';
+import { UsageError } from '@/components/providers/UsageError';
 import { getStatusInfo, CacheIndicator } from '@/components/providers/ProviderUsageCard';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -326,9 +327,7 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
               ) : result?.loading ? (
                 <p className="text-sm text-muted-foreground">Loading…</p>
               ) : result?.error ? (
-                <p className="text-sm text-red-400">
-                  {result.error.kind}: {result.error.message}
-                </p>
+                <UsageError error={result.error} compact />
               ) : null}
             </div>
           );
