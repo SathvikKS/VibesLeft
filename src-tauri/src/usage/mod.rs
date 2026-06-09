@@ -36,7 +36,7 @@ pub struct UsageReport {
 #[async_trait]
 pub trait UsageConnector: Send + Sync {
     fn provider_name(&self) -> &'static str;
-    async fn generate_report(&self) -> Result<UsageReport, AppError>;
+    async fn generate_report(&self, force_refresh: bool) -> Result<UsageReport, AppError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,11 +57,15 @@ impl UsageManager {
         Ok(Self { connectors })
     }
 
-    pub async fn generate_report(&self, provider: &str) -> Result<UsageReport, AppError> {
+    pub async fn generate_report(
+        &self,
+        provider: &str,
+        force_refresh: bool,
+    ) -> Result<UsageReport, AppError> {
         self.connectors
             .get(provider)
             .ok_or_else(|| AppError::NotFound(format!("unknown provider: {provider}")))?
-            .generate_report()
+            .generate_report(force_refresh)
             .await
     }
 }
@@ -73,7 +77,8 @@ impl UsageManager {
 #[tauri::command]
 pub async fn get_usage_report(
     provider: String,
+    force_refresh: bool,
     manager: tauri::State<'_, UsageManager>,
 ) -> Result<UsageReport, AppError> {
-    manager.generate_report(&provider).await
+    manager.generate_report(&provider, force_refresh).await
 }

@@ -225,6 +225,8 @@ impl ClaudeConnector {
     }
 }
 
+const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -238,7 +240,19 @@ impl UsageConnector for ClaudeConnector {
         "claude"
     }
 
-    async fn generate_report(&self) -> Result<UsageReport, AppError> {
+    async fn generate_report(&self, force_refresh: bool) -> Result<UsageReport, AppError> {
+        // Serve from cache if fresh and not a forced refresh
+        if !force_refresh {
+            if let Some(cached) = self.read_usage_cache() {
+                if now_ms() - cached.fetched_at_ms < CACHE_TTL_MS {
+                    return Ok(UsageReport {
+                        cached: true,
+                        ..cached
+                    });
+                }
+            }
+        }
+
         let start = Instant::now();
 
         // 1. Get a valid token (cached → source)

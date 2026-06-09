@@ -14,11 +14,14 @@ export const useUsageReport = (provider: string): UseUsageReportResult => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<{ kind: string; message: string } | null>(null);
 
-  const fetchUsage = useCallback(async () => {
+  const fetchUsage = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await invoke<UsageReport>('get_usage_report', { provider });
+      const result = await invoke<UsageReport>('get_usage_report', {
+        provider,
+        forceRefresh,
+      });
       setReport(result);
     } catch (err) {
       setError(err as { kind: string; message: string });
@@ -31,5 +34,5 @@ export const useUsageReport = (provider: string): UseUsageReportResult => {
     fetchUsage();
   }, [fetchUsage]);
 
-  return { report, loading, error, refetch: fetchUsage };
+  return { report, loading, error, refetch: () => fetchUsage(true) };
 };
