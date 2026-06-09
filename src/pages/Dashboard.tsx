@@ -1,10 +1,8 @@
 import { useMemo, useEffect, useRef } from 'react';
 import { useUsageReport } from '@/hooks/useUsageReport';
 import { ENABLED_PROVIDERS } from '@/providers.config';
-import { UsageError } from '@/components/providers/UsageError';
-import { getStatusInfo, CacheIndicator } from '@/components/providers/ProviderUsageCard';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
+import { getStatusInfo } from '@/components/providers/ProviderUsageCard';
+import { ProviderSummaryCard } from '@/components/providers/ProviderSummaryCard';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { AlertTriangle, CheckCircle2, Info } from 'lucide-react';
@@ -34,13 +32,6 @@ const Sparkline = () => (
   </svg>
 );
 
-const AxisLabels = () => (
-  <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5 pl-0">
-    {[0, 20, 40, 60, 80, 100].map((v) => (
-      <span key={v}>{v}</span>
-    ))}
-  </div>
-);
 
 export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
   const results = ENABLED_PROVIDERS.map((p) => useProviderReport(p.id));
@@ -145,6 +136,8 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
         </div>
       </div>
 
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold text-foreground max-w-2xl mx-auto w-full">Status Overview</h2>
       <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto w-full">
         {(
           [
@@ -243,95 +236,27 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
           )}
         </div>
       </div>
+      </div>
 
       <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold text-foreground">Providers</h2>
+        <h2 className="text-lg font-semibold text-foreground max-w-2xl mx-auto w-full">Providers</h2>
 
-        {ENABLED_PROVIDERS.map((provider) => {
-          const result = results.find((r) => r.id === provider.id);
-          const report = result?.report;
-          const utilization = utilizations[provider.id] ?? 0;
-          const statusInfo = getStatusInfo(utilization);
-
-          return (
-            <div key={provider.id} className="rounded-xl border bg-card p-5 shadow-sm max-w-2xl mx-auto w-full">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-background border border-border">
-                  <provider.icon size={20} className="text-foreground" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <p className="font-semibold text-foreground leading-none">{provider.name}</p>
-                  {report && (
-                    <CacheIndicator fetchedAtMs={report.fetched_at_ms} cached={report.cached} />
-                  )}
-                </div>
-              </div>
-
-              {report ? (
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-4">
-                    <span className="w-24 shrink-0 text-sm text-muted-foreground">5h Window</span>
-                    <div className="flex-1">
-                      <Progress
-                        value={report.five_hour.utilization}
-                        indicatorClassName={getStatusInfo(report.five_hour.utilization).bg}
-                        className="h-2"
-                      />
-                    </div>
-                    <span className="w-10 text-right text-sm font-medium text-foreground">
-                      {report.five_hour.utilization}%
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className="w-24 shrink-0 text-sm text-muted-foreground">7d Window</span>
-                    <div className="flex-1">
-                      <Progress
-                        value={report.seven_day.utilization}
-                        indicatorClassName={getStatusInfo(report.seven_day.utilization).bg}
-                        className="h-2"
-                      />
-                    </div>
-                    <span className="w-10 text-right text-sm font-medium text-foreground">
-                      {report.seven_day.utilization}%
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <span className="w-24 shrink-0" />
-                    <div className="flex-1">
-                      <AxisLabels />
-                    </div>
-                    <span className="w-10" />
-                  </div>
-                  <div className="flex items-center justify-between mt-1">
-                    <Badge
-                      variant="outline"
-                      className={
-                        utilization >= 90
-                          ? 'border-red-800/50 bg-red-950/40 text-red-400'
-                          : utilization >= 75
-                            ? 'border-amber-800/50 bg-amber-950/40 text-amber-400'
-                            : 'border-emerald-800/50 bg-emerald-950/40 text-emerald-400'
-                      }
-                    >
-                      {statusInfo.label}
-                    </Badge>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPage({ view: 'provider', id: provider.id })}
-                    >
-                      View details →
-                    </Button>
-                  </div>
-                </div>
-              ) : result?.loading ? (
-                <p className="text-sm text-muted-foreground">Loading…</p>
-              ) : result?.error ? (
-                <UsageError error={result.error} compact />
-              ) : null}
-            </div>
-          );
-        })}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-2xl mx-auto w-full">
+          {ENABLED_PROVIDERS.map((provider) => {
+            const result = results.find((r) => r.id === provider.id);
+            return (
+              <ProviderSummaryCard
+                key={provider.id}
+                provider={provider}
+                report={result?.report ?? null}
+                loading={result?.loading ?? false}
+                error={result?.error ?? null}
+                utilization={utilizations[provider.id] ?? 0}
+                onClick={() => setPage({ view: 'provider', id: provider.id })}
+              />
+            );
+          })}
+        </div>
       </div>
     </div>
   );
