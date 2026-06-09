@@ -53,6 +53,14 @@ struct AntigravityToken {
     access_token: String,
     #[serde(default)]
     expiry: Option<String>, // RFC3339
+    #[serde(default)]
+    refresh_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RefreshTokenResponse {
+    access_token: String,
+    expires_in: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +87,9 @@ impl AntigravityConnector {
     const KEYCHAIN_SERVICE: &'static str = "gemini";
     const KEYCHAIN_ACCOUNT: &'static str = "antigravity";
     const GOKEYRING_PREFIX: &'static str = "go-keyring-base64:";
+    const OAUTH_CLIENT_ID: &'static str = env!("ANTIGRAVITY_CLIENT_ID");
+    const OAUTH_CLIENT_SECRET: &'static str = env!("ANTIGRAVITY_CLIENT_SECRET");
+    const OAUTH_TOKEN_URL: &'static str = "https://oauth2.googleapis.com/token";
 
     /// Read + decode the source `gemini`/`antigravity` keychain entry.
     fn fetch_credentials_from_source(&self) -> Result<CachedCredentials, AppError> {
@@ -132,19 +143,63 @@ impl AntigravityConnector {
         Ok(CachedCredentials {
             token: auth.token.access_token,
             expires_at_ms,
+            refresh_token: auth.token.refresh_token,
         })
     }
 
-    /// Cache hit → return; miss → read source → persist (only if expiry known).
-    fn get_valid_token(&self) -> Result<String, AppError> {
-        if let Some(cached) = self.creds.get() {
-            return Ok(cached.token);
+    /// Cache hit (fresh) → return.
+    /// Within 15-min expiry window → proactively refresh via Google OAuth2.
+    /// Cache miss or refresh failure → fall back to Antigravity keychain.
+    async fn get_valid_token(&self) -> Result<String, AppError> {
+        if let Some(cached) = self.creds.get_raw() {
+            let ttl_ms = cached.expires_at_ms - now_ms();
+            if ttl_ms > PROACTIVE_REFRESH_MS {
+                return Ok(cached.token);
+            }
+            if let Some(rt) = &cached.refresh_token {
+                if let Ok(new_creds) = self.do_refresh(rt).await {
+                    let _ = self.creds.put(&new_creds);
+                    return Ok(new_creds.token);
+                }
+            }
         }
         let fresh = self.fetch_credentials_from_source()?;
         if fresh.expires_at_ms > 0 {
             let _ = self.creds.put(&fresh);
         }
         Ok(fresh.token)
+    }
+
+    async fn do_refresh(&self, refresh_token: &str) -> Result<CachedCredentials, AppError> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(Self::OAUTH_TOKEN_URL)
+            .header("User-Agent", "Go-http-client/2.0")
+            .form(&[
+                ("client_id", Self::OAUTH_CLIENT_ID),
+                ("client_secret", Self::OAUTH_CLIENT_SECRET),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+            ])
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if status.as_u16() == 400 || status.as_u16() == 401 {
+            return Err(AppError::ReauthRequired(
+                "refresh token rejected — re-authenticate with the Antigravity CLI".into(),
+            ));
+        }
+        if !status.is_success() {
+            return Err(AppError::Internal(format!("token refresh failed: {status}")));
+        }
+
+        let body: RefreshTokenResponse = resp.json().await?;
+        Ok(CachedCredentials {
+            token: body.access_token,
+            expires_at_ms: now_ms() + body.expires_in * 1_000,
+            refresh_token: Some(refresh_token.to_string()),
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -291,6 +346,7 @@ impl AntigravityConnector {
 }
 
 const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
+const PROACTIVE_REFRESH_MS: i64 = 15 * 60 * 1_000;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -320,7 +376,7 @@ impl UsageConnector for AntigravityConnector {
         let start = Instant::now();
 
         let _t1 = Instant::now();
-        let token = self.get_valid_token()?;
+        let token = self.get_valid_token().await?;
         eprintln!(
             "[timing] antigravity::generate_report get_valid_token = {:?}",
             _t1.elapsed()
@@ -350,30 +406,15 @@ impl UsageConnector for AntigravityConnector {
             }
 
             Err(AppError::Unauthorized(_)) => {
-                let t3 = Instant::now();
                 let _ = self.creds.clear();
-                eprintln!(
-                    "[timing] antigravity::generate_report creds_clear = {:?}",
-                    t3.elapsed()
-                );
 
-                let t4 = Instant::now();
-                let token = match self.fetch_credentials_from_source() {
-                    Ok(fresh) => {
-                        if fresh.expires_at_ms > 0 {
-                            let _ = self.creds.put(&fresh);
-                        }
-                        fresh.token
-                    }
+                let token = match self.get_valid_token().await {
+                    Ok(t) => t,
                     Err(AppError::ReauthRequired(msg)) => {
                         return Err(AppError::ReauthRequired(msg));
                     }
                     Err(e) => return Err(e),
                 };
-                eprintln!(
-                    "[timing] antigravity::generate_report retry_fetch = {:?}",
-                    t4.elapsed()
-                );
 
                 match self.get_usage_stats(&token).await {
                     Ok(stats) => {
@@ -431,5 +472,6 @@ mod tests {
         let creds = AntigravityConnector::parse_credentials(raw).unwrap();
         assert!(creds.token.starts_with("ya29."));
         assert!(creds.expires_at_ms > 0);
+        assert!(creds.refresh_token.is_some());
     }
 }

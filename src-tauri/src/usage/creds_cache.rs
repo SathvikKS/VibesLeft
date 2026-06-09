@@ -11,6 +11,8 @@ const SERVICE: &str = "vibes-left-token-cache";
 pub struct CachedCredentials {
     pub token: String,
     pub expires_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 /// Token cache backed by the OS keychain in release builds.
@@ -33,6 +35,11 @@ impl CredsCache {
         } else {
             None
         }
+    }
+
+    pub fn get_raw(&self) -> Option<CachedCredentials> {
+        let json = self.read_raw().ok()??;
+        serde_json::from_str(&json).ok()
     }
 
     pub fn put(&self, creds: &CachedCredentials) -> Result<(), AppError> {

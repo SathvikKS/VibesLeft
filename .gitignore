@@ -26,3 +26,4 @@ dist-ssr
 
 creds.json
 response.json
+.env.antigravity

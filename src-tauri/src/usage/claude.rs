@@ -93,6 +93,7 @@ impl ClaudeConnector {
         Ok(CachedCredentials {
             token,
             expires_at_ms,
+            refresh_token: None,
         })
     }
 
