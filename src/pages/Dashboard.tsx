@@ -48,7 +48,14 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
     const map: Record<string, number> = {};
     for (const r of results) {
       if (r.report) {
-        map[r.id] = Math.max(r.report.five_hour.utilization, r.report.seven_day.utilization);
+        const vals = [r.report.five_hour.utilization, r.report.seven_day.utilization];
+        if (r.report.metadata) {
+          vals.push(
+            r.report.metadata.secondary_five_hour.utilization,
+            r.report.metadata.secondary_seven_day.utilization,
+          );
+        }
+        map[r.id] = Math.max(...vals);
       }
     }
     return map;
@@ -69,7 +76,18 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
 
   const globalMaxUtilization =
     allReports.length > 0
-      ? Math.max(...allReports.map((r) => Math.max(r.report.five_hour.utilization, r.report.seven_day.utilization)))
+      ? Math.max(
+          ...allReports.map((r) => {
+            const vals = [r.report.five_hour.utilization, r.report.seven_day.utilization];
+            if (r.report.metadata) {
+              vals.push(
+                r.report.metadata.secondary_five_hour.utilization,
+                r.report.metadata.secondary_seven_day.utilization,
+              );
+            }
+            return Math.max(...vals);
+          }),
+        )
       : 0;
 
   const healthCounts = useMemo(() => {
@@ -77,7 +95,14 @@ export const Dashboard = ({ setPage, onUtilizationUpdate }: DashboardProps) => {
     let warning = 0;
     let critical = 0;
     for (const r of allReports) {
-      const maxU = Math.max(r.report.five_hour.utilization, r.report.seven_day.utilization);
+      const vals = [r.report.five_hour.utilization, r.report.seven_day.utilization];
+      if (r.report.metadata) {
+        vals.push(
+          r.report.metadata.secondary_five_hour.utilization,
+          r.report.metadata.secondary_seven_day.utilization,
+        );
+      }
+      const maxU = Math.max(...vals);
       if (maxU >= 90) critical++;
       else if (maxU >= 75) warning++;
       else healthy++;

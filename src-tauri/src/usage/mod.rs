@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
+mod antigravity;
 mod claude;
 mod codex;
 mod creds_cache;
@@ -22,12 +23,22 @@ pub struct UsageWindow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageMetadata {
+    pub primary_label: String,
+    pub secondary_label: String,
+    pub secondary_five_hour: UsageWindow,
+    pub secondary_seven_day: UsageWindow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageReport {
     pub provider_name: String,
     pub five_hour: UsageWindow,
     pub seven_day: UsageWindow,
     pub fetched_at_ms: i64,
     pub cached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<UsageMetadata>,
 }
 
 // ---------------------------------------------------------------------------
@@ -55,8 +66,11 @@ impl UsageManager {
         let codex = codex::CodexConnector::new(app.clone())?;
         connectors.insert(codex.provider_name(), Box::new(codex));
 
-        let claude = claude::ClaudeConnector::new(app)?;
+        let claude = claude::ClaudeConnector::new(app.clone())?;
         connectors.insert(claude.provider_name(), Box::new(claude));
+
+        let ag = antigravity::AntigravityConnector::new(app)?;
+        connectors.insert(ag.provider_name(), Box::new(ag));
 
         Ok(Self { connectors })
     }

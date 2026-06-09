@@ -186,6 +186,42 @@ export const MetricRow = ({
 };
 
 export const ProviderUsageCard = ({ report }: { report: UsageReport }) => {
+  if (report.metadata) {
+    return (
+      <Card className="w-full max-w-2xl mx-auto shadow-sm">
+        <CardContent className="p-6 flex flex-col gap-6 bg-muted/30 rounded-xl">
+          <div className="flex flex-col gap-3">
+            <h3 className="text-sm font-semibold text-foreground/70 uppercase tracking-wider">
+              {report.metadata.primary_label}
+            </h3>
+            <MetricRow title="5-Hour Window" icon={Clock} data={report.five_hour} />
+            <MetricRow
+              title="7-Day Window"
+              icon={CalendarDays}
+              data={report.seven_day}
+            />
+          </div>
+          <div className="border-t border-border" />
+          <div className="flex flex-col gap-3">
+            <h3 className="text-sm font-semibold text-foreground/70 uppercase tracking-wider">
+              {report.metadata.secondary_label}
+            </h3>
+            <MetricRow
+              title="5-Hour Window"
+              icon={Clock}
+              data={report.metadata.secondary_five_hour}
+            />
+            <MetricRow
+              title="7-Day Window"
+              icon={CalendarDays}
+              data={report.metadata.secondary_seven_day}
+            />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card className="w-full max-w-2xl mx-auto shadow-sm">
       <CardContent className="p-6 flex flex-col gap-4 bg-muted/30 rounded-xl">

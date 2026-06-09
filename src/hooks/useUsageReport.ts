@@ -26,6 +26,19 @@ export const useUsageReport = (provider: string): UseUsageReportResult => {
         ...result,
         five_hour: { ...result.five_hour, utilization: Math.round(result.five_hour.utilization) },
         seven_day: { ...result.seven_day, utilization: Math.round(result.seven_day.utilization) },
+        metadata: result.metadata
+          ? {
+              ...result.metadata,
+              secondary_five_hour: {
+                ...result.metadata.secondary_five_hour,
+                utilization: Math.round(result.metadata.secondary_five_hour.utilization),
+              },
+              secondary_seven_day: {
+                ...result.metadata.secondary_seven_day,
+                utilization: Math.round(result.metadata.secondary_seven_day.utilization),
+              },
+            }
+          : undefined,
       });
     } catch (err) {
       setError(err as { kind: string; message: string });

@@ -221,6 +221,7 @@ impl ClaudeConnector {
             },
             fetched_at_ms: now_ms(),
             cached: false,
+            metadata: None,
         }
     }
 }
