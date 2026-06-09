@@ -27,8 +27,8 @@ del "%APPDATA%\com.sathvikks.vibes-left\usage-cache.json"
 **Debug builds** — plain JSON files:
 
 ```sh
-# macOS
-rm -f /tmp/vibes-left-token-cache-*.json
+# macOS (uses $TMPDIR, typically /var/folders/.../T/)
+rm -f "$TMPDIR"vibes-left-token-cache-*.json
 ```
 
 ```powershell

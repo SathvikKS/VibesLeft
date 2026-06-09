@@ -111,7 +111,7 @@ impl CredsCache {
             .map_err(|e| AppError::Internal(format!("keyring entry: {e}")))
     }
 
-    /// Returns e.g. `/tmp/vibes-left-token-cache-claude.json`
+    /// Returns e.g. `$TMPDIR/vibes-left-token-cache-claude.json`
     #[cfg(debug_assertions)]
     fn dev_path(&self) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("{SERVICE}-{}.json", self.provider))

@@ -15,6 +15,12 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![greet, usage::get_usage_report])
         .setup(|app| {
+            #[cfg(debug_assertions)]
+            for provider in &["claude", "antigravity", "codex"] {
+                let path = std::env::temp_dir()
+                    .join(format!("vibes-left-token-cache-{provider}.json"));
+                eprintln!("[creds_cache] {} cache path: {}", provider, path.display());
+            }
             app.manage(usage::UsageManager::new(app.handle().clone())?);
             Ok(())
         });
