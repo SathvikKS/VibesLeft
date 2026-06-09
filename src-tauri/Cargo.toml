@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+dotenvy = "0.15"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -31,4 +32,5 @@ async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 dirs = "5"
 tokio = { version = "1", features = ["sync"] }
+dotenvy = "0.15"
 

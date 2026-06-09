@@ -87,9 +87,27 @@ impl AntigravityConnector {
     const KEYCHAIN_SERVICE: &'static str = "gemini";
     const KEYCHAIN_ACCOUNT: &'static str = "antigravity";
     const GOKEYRING_PREFIX: &'static str = "go-keyring-base64:";
-    const OAUTH_CLIENT_ID: &'static str = env!("ANTIGRAVITY_CLIENT_ID");
-    const OAUTH_CLIENT_SECRET: &'static str = env!("ANTIGRAVITY_CLIENT_SECRET");
     const OAUTH_TOKEN_URL: &'static str = "https://oauth2.googleapis.com/token";
+
+    fn oauth_client_id() -> Result<String, AppError> {
+        #[cfg(not(debug_assertions))]
+        { Ok(env!("ANTIGRAVITY_CLIENT_ID").to_string()) }
+        #[cfg(debug_assertions)]
+        {
+            std::env::var("ANTIGRAVITY_CLIENT_ID")
+                .map_err(|_| AppError::Internal("ANTIGRAVITY_CLIENT_ID not set in .env".into()))
+        }
+    }
+
+    fn oauth_client_secret() -> Result<String, AppError> {
+        #[cfg(not(debug_assertions))]
+        { Ok(env!("ANTIGRAVITY_CLIENT_SECRET").to_string()) }
+        #[cfg(debug_assertions)]
+        {
+            std::env::var("ANTIGRAVITY_CLIENT_SECRET")
+                .map_err(|_| AppError::Internal("ANTIGRAVITY_CLIENT_SECRET not set in .env".into()))
+        }
+    }
 
     /// Read + decode the source `gemini`/`antigravity` keychain entry.
     fn fetch_credentials_from_source(&self) -> Result<CachedCredentials, AppError> {
@@ -172,12 +190,14 @@ impl AntigravityConnector {
 
     async fn do_refresh(&self, refresh_token: &str) -> Result<CachedCredentials, AppError> {
         let client = reqwest::Client::new();
+        let client_id = Self::oauth_client_id()?;
+        let client_secret = Self::oauth_client_secret()?;
         let resp = client
             .post(Self::OAUTH_TOKEN_URL)
             .header("User-Agent", "Go-http-client/2.0")
             .form(&[
-                ("client_id", Self::OAUTH_CLIENT_ID),
-                ("client_secret", Self::OAUTH_CLIENT_SECRET),
+                ("client_id", client_id.as_str()),
+                ("client_secret", client_secret.as_str()),
                 ("grant_type", "refresh_token"),
                 ("refresh_token", refresh_token),
             ])
