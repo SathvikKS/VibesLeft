@@ -22,7 +22,11 @@ export const useUsageReport = (provider: string): UseUsageReportResult => {
         provider,
         forceRefresh,
       });
-      setReport(result);
+      setReport({
+        ...result,
+        five_hour: { ...result.five_hour, utilization: Math.round(result.five_hour.utilization) },
+        seven_day: { ...result.seven_day, utilization: Math.round(result.seven_day.utilization) },
+      });
     } catch (err) {
       setError(err as { kind: string; message: string });
     } finally {
