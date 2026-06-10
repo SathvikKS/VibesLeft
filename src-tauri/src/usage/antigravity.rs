@@ -167,7 +167,7 @@ impl CredentialSource for AntigravityCredSource {
     }
 
     async fn refresh(&self, rt: &str) -> Result<CachedCredentials, AppError> {
-        let client = reqwest::Client::new();
+        let client = crate::http_client::build_client()?;
         let client_id = Self::oauth_client_id()?;
         let client_secret = Self::oauth_client_secret()?;
         let resp = client
@@ -245,7 +245,7 @@ impl AntigravityConnector {
     // -----------------------------------------------------------------------
 
     async fn get_usage_stats(&self, token: &str) -> Result<QuotaSummaryResponse, AppError> {
-        let client = reqwest::Client::new();
+        let client = crate::http_client::build_client()?;
 
         // 1. LoadCodeAssist -> get project name
         let resp = client

@@ -176,7 +176,7 @@ impl CredentialSource for ClaudeCredSource {
     }
 
     async fn refresh(&self, rt: &str) -> Result<CachedCredentials, AppError> {
-        let client = reqwest::Client::new();
+        let client = crate::http_client::build_client()?;
         let resp = client
             .post("https://platform.claude.com/v1/oauth/token")
             .header("Accept", "application/json, text/plain, */*")
@@ -259,7 +259,7 @@ impl ClaudeConnector {
     async fn get_usage_stats(&self, token: &str) -> Result<ClaudeUsageResponse, AppError> {
         let start = Instant::now();
 
-        let client = reqwest::Client::new();
+        let client = crate::http_client::build_client()?;
         let resp = client
             .get("https://api.anthropic.com/api/oauth/usage")
             .header("Authorization", format!("Bearer {token}"))

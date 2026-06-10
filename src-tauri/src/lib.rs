@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 mod error;
+mod http_client;
 mod usage;
 
 #[tauri::command]

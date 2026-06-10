@@ -144,7 +144,7 @@ impl CodexConnector {
     ) -> Result<CodexUsageResponse, AppError> {
         let _start = Instant::now();
 
-        let client = reqwest::Client::new();
+        let client = crate::http_client::build_client()?;
         let resp = client
             .get("https://chatgpt.com/backend-api/wham/usage")
             .header("Authorization", format!("Bearer {token}"))
