@@ -98,7 +98,6 @@ impl ClaudeCredSource {
             token,
             expires_at_ms,
             refresh_token: oauth.refresh_token.unwrap_or_default(),
-            account_id: String::new(),
         })
     }
 
@@ -211,7 +210,6 @@ impl CredentialSource for ClaudeCredSource {
             token: body.access_token,
             expires_at_ms: now_ms() + body.expires_in * 1_000,
             refresh_token: body.refresh_token.unwrap_or_else(|| rt.to_string()),
-            account_id: String::new(),
         })
     }
 }

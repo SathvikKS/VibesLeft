@@ -10,8 +10,6 @@ pub struct CachedCredentials {
     pub expires_at_ms: i64,
     #[serde(default)]
     pub refresh_token: String,
-    #[serde(default)]
-    pub account_id: String,
 }
 
 /// Token cache backed by the OS keychain in release builds.

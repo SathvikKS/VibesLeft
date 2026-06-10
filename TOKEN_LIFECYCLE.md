@@ -57,7 +57,7 @@ generate_report(force_refresh)
 
 - **`recover_from_rejection(rejected_token)`** — the token comparison is load-bearing. It both dedupes concurrent recoveries (another task already refreshed → reuse) **and** guarantees a revoked-but-locally-unexpired AT still gets refreshed instead of being returned verbatim.
 - **`expires_at_ms == 0` means "unknown expiry — use until rejected"** (codex), NOT "expired". Don't "fix" comparisons without honoring this.
-- **`CachedCredentials.account_id`** exists solely for codex (serde-default, empty for claude/antigravity).
+- Codex derives `chatgpt_account_id` on-demand by JWT-decoding it from the access_token (`https://api.openai.com/auth.chatgpt_account_id`); it is not stored in `CachedCredentials`.
 - **`CredsCache` backend**: OS keychain in release; `$TMPDIR/vibes-left-token-cache-<provider>.json` in debug — unsigned debug binaries would otherwise trigger the macOS keychain ACL prompt on every recompile.
 - Cache write/clear failures are logged (`[token_manager] …`) but never abort the flow.
 

@@ -8,6 +8,10 @@ use tauri_plugin_store::StoreExt;
 use super::token_manager::{CredentialSource, TokenManager};
 use super::{run_report_flow, CachedCredentials, UsageConnector, UsageReport, UsageWindow};
 use crate::error::AppError;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_TOKEN_TTL_S: i64 = 863_999;
 
 // ---------------------------------------------------------------------------
 // Raw API response types
@@ -37,16 +41,38 @@ struct CodexWindow {
 #[derive(Deserialize)]
 struct CodexAuthFile {
     tokens: CodexTokens,
+    #[serde(default)]
+    last_refresh: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct CodexTokens {
     access_token: String,
-    account_id: String,
+    #[serde(default)]
+    refresh_token: String,
+}
+
+#[derive(Deserialize)]
+struct CodexRefreshResponse {
+    access_token: String,
+    expires_in: i64,
+    refresh_token: String,
 }
 
 // ---------------------------------------------------------------------------
-// Credential source (no refresh — file is re-read on 401)
+// JWT helpers
+// ---------------------------------------------------------------------------
+
+fn account_id_from_jwt(token: &str) -> Option<String> {
+    let payload_b64 = token.split('.').nth(1)?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    json["https://api.openai.com/auth"]["chatgpt_account_id"]
+        .as_str()
+        .map(str::to_string)
+}
+
+// Credential source
 // ---------------------------------------------------------------------------
 
 struct CodexCredSource;
@@ -65,19 +91,27 @@ impl CodexCredSource {
         })?;
 
         let auth: CodexAuthFile = serde_json::from_str(&contents).map_err(|_| {
-            AppError::ReauthRequired("unreadable credentials in ~/.codex/auth.json — re-authenticate in ChatGPT".into())
+            AppError::ReauthRequired(
+                "unreadable credentials in ~/.codex/auth.json — re-authenticate in ChatGPT".into(),
+            )
         })?;
-        if auth.tokens.access_token.is_empty() || auth.tokens.account_id.is_empty() {
+        if auth.tokens.access_token.is_empty() {
             return Err(AppError::ReauthRequired(
                 "incomplete credentials in ~/.codex/auth.json".into(),
             ));
         }
 
+        let expires_at_ms = auth
+            .last_refresh
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp_millis() + CODEX_TOKEN_TTL_S * 1_000)
+            .unwrap_or(0);
+
         Ok(CachedCredentials {
             token: auth.tokens.access_token,
-            expires_at_ms: 0, // unknown expiry — use until rejected
-            refresh_token: String::new(),
-            account_id: auth.tokens.account_id,
+            expires_at_ms,
+            refresh_token: auth.tokens.refresh_token,
         })
     }
 }
@@ -89,11 +123,47 @@ impl CredentialSource for CodexCredSource {
     }
 
     fn supports_refresh(&self) -> bool {
-        false
+        true
     }
 
     fn fetch_from_source(&self) -> Result<CachedCredentials, AppError> {
         Self::read_auth_file()
+    }
+
+    async fn refresh(&self, rt: &str) -> Result<CachedCredentials, AppError> {
+        let client = crate::http_client::build_client()?;
+        let resp = client
+            .post("https://auth.openai.com/oauth/token")
+            .header("accept", "*/*")
+            .header("originator", "codex-tui")
+            .header("user-agent", "codex-tui/0.137.0")
+            .json(&serde_json::json!({
+                "client_id": CODEX_CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": rt,
+            }))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        if status.is_client_error() {
+            return Err(AppError::ReauthRequired(format!(
+                "codex refresh rejected ({status}) — re-authenticate in ChatGPT"
+            )));
+        }
+        if !status.is_success() {
+            return Err(AppError::Internal(format!(
+                "codex refresh endpoint returned {status}"
+            )));
+        }
+
+        let body: CodexRefreshResponse = resp.json().await.map_err(AppError::from)?;
+
+        Ok(CachedCredentials {
+            token: body.access_token,
+            expires_at_ms: now_ms() + body.expires_in * 1_000,
+            refresh_token: body.refresh_token,
+        })
     }
 }
 
@@ -230,7 +300,10 @@ impl UsageConnector for CodexConnector {
             &self.tokens,
             || self.read_usage_cache(),
             |r| self.write_usage_cache(r),
-            |creds| async move { self.get_usage_stats(&creds.token, &creds.account_id).await },
+            |creds| async move {
+                let account_id = account_id_from_jwt(&creds.token).unwrap_or_default();
+                self.get_usage_stats(&creds.token, &account_id).await
+            },
             Self::map_stats,
             "credentials expired — re-authenticate in ChatGPT",
             force_refresh,
