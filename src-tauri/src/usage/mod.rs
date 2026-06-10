@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::future::Future;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,7 @@ mod creds_cache;
 mod token_manager;
 
 pub(super) use creds_cache::{CachedCredentials, CredsCache};
+use token_manager::{CredentialSource, TokenManager};
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -40,6 +43,187 @@ pub struct UsageReport {
     pub cached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<UsageMetadata>,
+}
+
+/// How long we serve a cached usage report before hitting the API again.
+const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Serve a stale cached report if available, otherwise return `err` as-is.
+fn stale_report_or(
+    read_cache: &impl Fn() -> Option<UsageReport>,
+    err: AppError,
+) -> Result<UsageReport, AppError> {
+    if let Some(cached) = read_cache() {
+        Ok(UsageReport { cached: true, ..cached })
+    } else {
+        Err(err)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared generate_report flow — every provider's generate_report delegates
+// to this so the lifecycle logic cannot drift.
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+async fn run_report_flow<S, F, Fut, Stats>(
+    provider: &str,
+    tokens: &TokenManager<S>,
+    read_cache: impl Fn() -> Option<UsageReport>,
+    write_cache: impl Fn(&UsageReport),
+    fetch: F,
+    map_stats: impl Fn(Stats) -> UsageReport,
+    reauth_msg: &str,
+    force_refresh: bool,
+) -> Result<UsageReport, AppError>
+where
+    S: CredentialSource,
+    F: Fn(CachedCredentials) -> Fut,
+    Fut: Future<Output = Result<Stats, AppError>>,
+{
+    if !force_refresh {
+        if let Some(cached) = read_cache() {
+            if now_ms() - cached.fetched_at_ms < CACHE_TTL_MS {
+                return Ok(UsageReport {
+                    cached: true,
+                    ..cached
+                });
+            }
+        }
+    }
+
+    let start = Instant::now();
+
+    let _t1 = Instant::now();
+    let creds = match tokens.get_valid_token().await {
+        Ok(c) => c,
+        Err(AppError::Internal(msg)) => {
+            eprintln!(
+                "[timing] {provider}::generate_report (total, cached fallback) = {:?}",
+                start.elapsed()
+            );
+            return stale_report_or(
+                &read_cache,
+                AppError::Internal(format!(
+                    "credentials unavailable and no cached report available: {msg}"
+                )),
+            );
+        }
+        Err(e) => return Err(e),
+    };
+    eprintln!(
+        "[timing] {provider}::generate_report get_valid_token = {:?}",
+        _t1.elapsed()
+    );
+
+    let t2 = Instant::now();
+    let result = fetch(creds.clone()).await;
+    eprintln!(
+        "[timing] {provider}::generate_report get_usage_stats = {:?}",
+        t2.elapsed()
+    );
+
+    let rejected_token = creds.token.clone();
+
+    match result {
+        Ok(stats) => {
+            let t3 = Instant::now();
+            let report = map_stats(stats);
+            write_cache(&report);
+            eprintln!(
+                "[timing] {provider}::generate_report write_cache = {:?}",
+                t3.elapsed()
+            );
+            eprintln!(
+                "[timing] {provider}::generate_report (total, success) = {:?}",
+                start.elapsed()
+            );
+            Ok(report)
+        }
+
+        Err(AppError::Unauthorized(_)) => {
+            let t3 = Instant::now();
+            let creds = match tokens.recover_from_rejection(&rejected_token).await {
+                Ok(c) => c,
+                Err(AppError::ReauthRequired(msg)) => {
+                    eprintln!(
+                        "[timing] {provider}::generate_report (total, reauth) = {:?}",
+                        start.elapsed()
+                    );
+                    return Err(AppError::ReauthRequired(msg));
+                }
+                Err(AppError::Internal(msg)) => {
+                    eprintln!(
+                        "[timing] {provider}::generate_report (total, cached fallback) = {:?}",
+                        start.elapsed()
+                    );
+                    return stale_report_or(
+                        &read_cache,
+                        AppError::Internal(format!(
+                            "credentials unavailable and no cached report available: {msg}"
+                        )),
+                    );
+                }
+                Err(e) => return Err(e),
+            };
+            eprintln!(
+                "[timing] {provider}::generate_report recover = {:?}",
+                t3.elapsed()
+            );
+
+            match fetch(creds).await {
+                Ok(stats) => {
+                    let report = map_stats(stats);
+                    write_cache(&report);
+                    eprintln!(
+                        "[timing] {provider}::generate_report (total, retry ok) = {:?}",
+                        start.elapsed()
+                    );
+                    Ok(report)
+                }
+                Err(AppError::Unauthorized(_)) => {
+                    eprintln!(
+                        "[timing] {provider}::generate_report (total, reauth) = {:?}",
+                        start.elapsed()
+                    );
+                    Err(AppError::ReauthRequired(reauth_msg.into()))
+                }
+                Err(e) => {
+                    if let Some(cached) = read_cache() {
+                        eprintln!(
+                            "[timing] {provider}::generate_report (total, retry cached fallback) = {:?}",
+                            start.elapsed()
+                        );
+                        Ok(UsageReport { cached: true, ..cached })
+                    } else {
+                        Err(e)
+                    }
+                }
+            }
+        }
+
+        Err(AppError::Internal(msg)) => {
+            eprintln!(
+                "[timing] {provider}::generate_report (total, cached fallback) = {:?}",
+                start.elapsed()
+            );
+            stale_report_or(
+                &read_cache,
+                AppError::Internal(format!(
+                    "API unavailable and no cached report available: {msg}"
+                )),
+            )
+        }
+
+        Err(e) => Err(e),
+    }
 }
 
 // ---------------------------------------------------------------------------

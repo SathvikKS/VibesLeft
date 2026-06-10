@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use super::token_manager::{CredentialSource, TokenManager};
-use super::{CachedCredentials, UsageConnector, UsageReport, UsageWindow};
+use super::{run_report_flow, CachedCredentials, UsageConnector, UsageReport, UsageWindow};
 use crate::error::AppError;
 
 // ---------------------------------------------------------------------------
@@ -98,6 +98,7 @@ impl ClaudeCredSource {
             token,
             expires_at_ms,
             refresh_token: oauth.refresh_token.unwrap_or_default(),
+            account_id: String::new(),
         })
     }
 
@@ -191,7 +192,7 @@ impl CredentialSource for ClaudeCredSource {
             .map_err(|e| AppError::Internal(format!("token refresh request failed: {e}")))?;
 
         let status = resp.status();
-        if status.as_u16() == 400 || status.as_u16() == 401 {
+        if status.is_client_error() {
             return Err(AppError::ReauthRequired(
                 "refresh token rejected — run `claude login` in your terminal".into(),
             ));
@@ -210,6 +211,7 @@ impl CredentialSource for ClaudeCredSource {
             token: body.access_token,
             expires_at_ms: now_ms() + body.expires_in * 1_000,
             refresh_token: body.refresh_token.unwrap_or_else(|| rt.to_string()),
+            account_id: String::new(),
         })
     }
 }
@@ -271,14 +273,21 @@ impl ClaudeConnector {
 
         let status = resp.status();
 
-        if status.is_client_error() {
-            return Err(AppError::Unauthorized(format!(
-                "API rejected the token ({status})"
-            )));
-        }
-
-        if !status.is_success() {
-            return Err(AppError::Internal(format!("API returned {status}")));
+        match status.as_u16() {
+            401 | 403 => {
+                return Err(AppError::Unauthorized(format!(
+                    "API rejected the token ({status})"
+                )));
+            }
+            _ if status.is_client_error() => {
+                return Err(AppError::Internal(format!(
+                    "usage API returned client error {status}"
+                )));
+            }
+            _ if !status.is_success() => {
+                return Err(AppError::Internal(format!("API returned {status}")));
+            }
+            _ => {}
         }
 
         let result = resp.json().await.map_err(AppError::from);
@@ -307,8 +316,6 @@ impl ClaudeConnector {
     }
 }
 
-const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -323,105 +330,16 @@ impl UsageConnector for ClaudeConnector {
     }
 
     async fn generate_report(&self, force_refresh: bool) -> Result<UsageReport, AppError> {
-        if !force_refresh {
-            if let Some(cached) = self.read_usage_cache() {
-                if now_ms() - cached.fetched_at_ms < CACHE_TTL_MS {
-                    return Ok(UsageReport {
-                        cached: true,
-                        ..cached
-                    });
-                }
-            }
-        }
-
-        let start = Instant::now();
-
-        let _t1 = Instant::now();
-        let token = self.tokens.get_valid_token().await?;
-        eprintln!(
-            "[timing] claude::generate_report get_valid_token = {:?}",
-            _t1.elapsed()
-        );
-
-        let t2 = Instant::now();
-        let result = self.get_usage_stats(&token).await;
-        eprintln!(
-            "[timing] claude::generate_report get_usage_stats = {:?}",
-            t2.elapsed()
-        );
-
-        match result {
-            Ok(stats) => {
-                let t3 = Instant::now();
-                let report = Self::map_stats(stats);
-                self.write_usage_cache(&report);
-                eprintln!(
-                    "[timing] claude::generate_report write_cache = {:?}",
-                    t3.elapsed()
-                );
-                eprintln!(
-                    "[timing] claude::generate_report (total, success) = {:?}",
-                    start.elapsed()
-                );
-                Ok(report)
-            }
-
-            Err(AppError::Unauthorized(_)) => {
-                let t3 = Instant::now();
-                let token = match self.tokens.recover_from_rejection().await {
-                    Ok(t) => t,
-                    Err(AppError::ReauthRequired(msg)) => {
-                        return Err(AppError::ReauthRequired(msg));
-                    }
-                    Err(e) => return Err(e),
-                };
-                eprintln!(
-                    "[timing] claude::generate_report recover = {:?}",
-                    t3.elapsed()
-                );
-
-                match self.get_usage_stats(&token).await {
-                    Ok(stats) => {
-                        let report = Self::map_stats(stats);
-                        self.write_usage_cache(&report);
-                        eprintln!(
-                            "[timing] claude::generate_report (total, retry ok) = {:?}",
-                            start.elapsed()
-                        );
-                        Ok(report)
-                    }
-                    Err(AppError::Unauthorized(_)) => {
-                        eprintln!(
-                            "[timing] claude::generate_report (total, reauth) = {:?}",
-                            start.elapsed()
-                        );
-                        Err(AppError::ReauthRequired(
-                            "credentials expired — run `claude login` in your terminal".into(),
-                        ))
-                    }
-                    Err(AppError::Internal(msg)) => Err(AppError::Internal(msg)),
-                    Err(e) => Err(e),
-                }
-            }
-
-            Err(AppError::Internal(msg)) => {
-                if let Some(cached) = self.read_usage_cache() {
-                    eprintln!(
-                        "[timing] claude::generate_report (total, cached fallback) = {:?}",
-                        start.elapsed()
-                    );
-                    Ok(UsageReport {
-                        cached: true,
-                        ..cached
-                    })
-                } else {
-                    Err(AppError::Internal(format!(
-                        "API unavailable and no cached report available: {msg}"
-                    )))
-                }
-            }
-
-            Err(e) => Err(e),
-        }
+        run_report_flow(
+            "claude",
+            &self.tokens,
+            || self.read_usage_cache(),
+            |r| self.write_usage_cache(r),
+            |creds| async move { self.get_usage_stats(&creds.token).await },
+            Self::map_stats,
+            "credentials expired — run `claude login` in your terminal",
+            force_refresh,
+        )
+        .await
     }
 }

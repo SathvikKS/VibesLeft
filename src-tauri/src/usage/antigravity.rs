@@ -1,4 +1,4 @@
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use super::token_manager::{CredentialSource, TokenManager};
-use super::{CachedCredentials, UsageConnector, UsageMetadata, UsageReport, UsageWindow};
+use super::{run_report_flow, CachedCredentials, UsageConnector, UsageMetadata, UsageReport, UsageWindow};
 use crate::error::AppError;
 
 // ---------------------------------------------------------------------------
@@ -130,6 +130,7 @@ impl AntigravityCredSource {
             token: auth.token.access_token,
             expires_at_ms,
             refresh_token: auth.token.refresh_token.unwrap_or_default(),
+            account_id: String::new(),
         })
     }
 }
@@ -182,7 +183,7 @@ impl CredentialSource for AntigravityCredSource {
             .await?;
 
         let status = resp.status();
-        if status.as_u16() == 400 || status.as_u16() == 401 {
+        if status.is_client_error() {
             return Err(AppError::ReauthRequired(
                 "refresh token rejected — re-authenticate with the Antigravity CLI".into(),
             ));
@@ -198,6 +199,7 @@ impl CredentialSource for AntigravityCredSource {
             token: body.access_token,
             expires_at_ms: now_ms() + body.expires_in * 1_000,
             refresh_token: body.refresh_token.unwrap_or_else(|| rt.to_string()),
+            account_id: String::new(),
         })
     }
 }
@@ -257,16 +259,23 @@ impl AntigravityConnector {
 
         let status = resp.status();
 
-        if status.is_client_error() {
-            return Err(AppError::Unauthorized(format!(
-                "API rejected the token ({status})"
-            )));
-        }
-
-        if !status.is_success() {
-            return Err(AppError::Internal(format!(
-                "loadCodeAssist returned {status}"
-            )));
+        match status.as_u16() {
+            401 | 403 => {
+                return Err(AppError::Unauthorized(format!(
+                    "API rejected the token ({status})"
+                )));
+            }
+            _ if status.is_client_error() => {
+                return Err(AppError::Internal(format!(
+                    "loadCodeAssist returned client error {status}"
+                )));
+            }
+            _ if !status.is_success() => {
+                return Err(AppError::Internal(format!(
+                    "loadCodeAssist returned {status}"
+                )));
+            }
+            _ => {}
         }
 
         let load_resp: LoadCodeAssistResponse = resp.json().await.map_err(AppError::from)?;
@@ -284,16 +293,23 @@ impl AntigravityConnector {
 
         let status = resp.status();
 
-        if status.is_client_error() {
-            return Err(AppError::Unauthorized(format!(
-                "API rejected the token ({status})"
-            )));
-        }
-
-        if !status.is_success() {
-            return Err(AppError::Internal(format!(
-                "retrieveUserQuotaSummary returned {status}"
-            )));
+        match status.as_u16() {
+            401 | 403 => {
+                return Err(AppError::Unauthorized(format!(
+                    "API rejected the token ({status})"
+                )));
+            }
+            _ if status.is_client_error() => {
+                return Err(AppError::Internal(format!(
+                    "retrieveUserQuotaSummary returned client error {status}"
+                )));
+            }
+            _ if !status.is_success() => {
+                return Err(AppError::Internal(format!(
+                    "retrieveUserQuotaSummary returned {status}"
+                )));
+            }
+            _ => {}
         }
 
         resp.json().await.map_err(AppError::from)
@@ -362,8 +378,6 @@ impl AntigravityConnector {
     }
 }
 
-const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -378,101 +392,17 @@ impl UsageConnector for AntigravityConnector {
     }
 
     async fn generate_report(&self, force_refresh: bool) -> Result<UsageReport, AppError> {
-        if !force_refresh {
-            if let Some(cached) = self.read_usage_cache() {
-                if now_ms() - cached.fetched_at_ms < CACHE_TTL_MS {
-                    return Ok(UsageReport {
-                        cached: true,
-                        ..cached
-                    });
-                }
-            }
-        }
-
-        let start = Instant::now();
-
-        let _t1 = Instant::now();
-        let token = self.tokens.get_valid_token().await?;
-        eprintln!(
-            "[timing] antigravity::generate_report get_valid_token = {:?}",
-            _t1.elapsed()
-        );
-
-        let t2 = Instant::now();
-        let result = self.get_usage_stats(&token).await;
-        eprintln!(
-            "[timing] antigravity::generate_report get_usage_stats = {:?}",
-            t2.elapsed()
-        );
-
-        match result {
-            Ok(stats) => {
-                let t3 = Instant::now();
-                let report = Self::map_stats(stats.buckets);
-                self.write_usage_cache(&report);
-                eprintln!(
-                    "[timing] antigravity::generate_report write_cache = {:?}",
-                    t3.elapsed()
-                );
-                eprintln!(
-                    "[timing] antigravity::generate_report (total, success) = {:?}",
-                    start.elapsed()
-                );
-                Ok(report)
-            }
-
-            Err(AppError::Unauthorized(_)) => {
-                let token = match self.tokens.recover_from_rejection().await {
-                    Ok(t) => t,
-                    Err(AppError::ReauthRequired(msg)) => {
-                        return Err(AppError::ReauthRequired(msg));
-                    }
-                    Err(e) => return Err(e),
-                };
-
-                match self.get_usage_stats(&token).await {
-                    Ok(stats) => {
-                        let report = Self::map_stats(stats.buckets);
-                        self.write_usage_cache(&report);
-                        eprintln!(
-                            "[timing] antigravity::generate_report (total, retry ok) = {:?}",
-                            start.elapsed()
-                        );
-                        Ok(report)
-                    }
-                    Err(AppError::Unauthorized(_)) => {
-                        eprintln!(
-                            "[timing] antigravity::generate_report (total, reauth) = {:?}",
-                            start.elapsed()
-                        );
-                        Err(AppError::ReauthRequired(
-                            "credentials expired — re-authenticate with the Antigravity CLI".into(),
-                        ))
-                    }
-                    Err(AppError::Internal(msg)) => Err(AppError::Internal(msg)),
-                    Err(e) => Err(e),
-                }
-            }
-
-            Err(AppError::Internal(msg)) => {
-                if let Some(cached) = self.read_usage_cache() {
-                    eprintln!(
-                        "[timing] antigravity::generate_report (total, cached fallback) = {:?}",
-                        start.elapsed()
-                    );
-                    Ok(UsageReport {
-                        cached: true,
-                        ..cached
-                    })
-                } else {
-                    Err(AppError::Internal(format!(
-                        "API unavailable and no cached report available: {msg}"
-                    )))
-                }
-            }
-
-            Err(e) => Err(e),
-        }
+        run_report_flow(
+            "antigravity",
+            &self.tokens,
+            || self.read_usage_cache(),
+            |r| self.write_usage_cache(r),
+            |creds| async move { self.get_usage_stats(&creds.token).await },
+            |stats| Self::map_stats(stats.buckets),
+            "credentials expired — re-authenticate with the Antigravity CLI",
+            force_refresh,
+        )
+        .await
     }
 }
 

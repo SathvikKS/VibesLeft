@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Vibes Left** (515 symbols, 895 relationships, 23 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Vibes Left** (529 symbols, 989 relationships, 36 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -43,9 +43,12 @@ This project is indexed by GitNexus as **Vibes Left** (515 symbols, 895 relation
 <!-- gitnexus:end -->
 
 <!-- tauri:start -->
+
 ## Tauri Development Standards
 
 This project uses **Tauri v2**. All IPC, security, and state-management decisions are governed by the design document at [`TAURI_DESIGN.md`](./TAURI_DESIGN.md). Read it before writing or reviewing any Rust backend or frontend IPC code.
+
+Credential/token handling in `src-tauri/src/usage/` is governed by [`TOKEN_LIFECYCLE.md`](./TOKEN_LIFECYCLE.md). Read it before touching any connector, `TokenManager`, or `CredsCache` code.
 
 ### Always Do
 
@@ -64,14 +67,14 @@ This project uses **Tauri v2**. All IPC, security, and state-management decision
 
 ### Key Sections in TAURI_DESIGN.md
 
-| Topic | Section |
-|---|---|
-| IPC command patterns & naming | §2 IPC Command Standards |
-| Typed error enum | §3 Error Handling |
-| Capabilities / ACL / CSP | §4 Security |
-| State management & locking | §5 State Management |
-| Event system | §6 Event System |
+| Topic                              | Section                    |
+| ---------------------------------- | -------------------------- |
+| IPC command patterns & naming      | §2 IPC Command Standards   |
+| Typed error enum                   | §3 Error Handling          |
+| Capabilities / ACL / CSP           | §4 Security                |
+| State management & locking         | §5 State Management        |
+| Event system                       | §6 Event System            |
 | Plugin safety (MCP bridge, opener) | §7 Plugin Safety Protocols |
-| Pre-release checklist | §9 Pre-Release Checklist |
+| Pre-release checklist              | §9 Pre-Release Checklist   |
 
 <!-- tauri:end -->

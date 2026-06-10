@@ -5,7 +5,8 @@ use serde::Deserialize;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
-use super::{UsageConnector, UsageReport, UsageWindow};
+use super::token_manager::{CredentialSource, TokenManager};
+use super::{run_report_flow, CachedCredentials, UsageConnector, UsageReport, UsageWindow};
 use crate::error::AppError;
 
 // ---------------------------------------------------------------------------
@@ -45,23 +46,13 @@ struct CodexTokens {
 }
 
 // ---------------------------------------------------------------------------
-// Connector
+// Credential source (no refresh — file is re-read on 401)
 // ---------------------------------------------------------------------------
 
-pub struct CodexConnector {
-    app: AppHandle,
-}
+struct CodexCredSource;
 
-impl CodexConnector {
-    pub fn new(app: AppHandle) -> Result<Self, AppError> {
-        Ok(Self { app })
-    }
-
-    // -----------------------------------------------------------------------
-    // Credentials source (file only — no expiresAt to drive Stronghold)
-    // -----------------------------------------------------------------------
-
-    fn read_auth_file(&self) -> Result<(String, String), AppError> {
+impl CodexCredSource {
+    fn read_auth_file() -> Result<CachedCredentials, AppError> {
         let home = dirs::home_dir()
             .ok_or_else(|| AppError::Internal("unable to determine home directory".into()))?;
 
@@ -73,14 +64,54 @@ impl CodexConnector {
             _ => AppError::Internal(format!("could not read ~/.codex/auth.json: {e}")),
         })?;
 
-        let auth: CodexAuthFile = serde_json::from_str(&contents)?;
+        let auth: CodexAuthFile = serde_json::from_str(&contents).map_err(|_| {
+            AppError::ReauthRequired("unreadable credentials in ~/.codex/auth.json — re-authenticate in ChatGPT".into())
+        })?;
         if auth.tokens.access_token.is_empty() || auth.tokens.account_id.is_empty() {
             return Err(AppError::ReauthRequired(
                 "incomplete credentials in ~/.codex/auth.json".into(),
             ));
         }
 
-        Ok((auth.tokens.access_token, auth.tokens.account_id))
+        Ok(CachedCredentials {
+            token: auth.tokens.access_token,
+            expires_at_ms: 0, // unknown expiry — use until rejected
+            refresh_token: String::new(),
+            account_id: auth.tokens.account_id,
+        })
+    }
+}
+
+#[async_trait]
+impl CredentialSource for CodexCredSource {
+    fn provider(&self) -> &'static str {
+        "codex"
+    }
+
+    fn supports_refresh(&self) -> bool {
+        false
+    }
+
+    fn fetch_from_source(&self) -> Result<CachedCredentials, AppError> {
+        Self::read_auth_file()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connector
+// ---------------------------------------------------------------------------
+
+pub struct CodexConnector {
+    tokens: TokenManager<CodexCredSource>,
+    app: AppHandle,
+}
+
+impl CodexConnector {
+    pub fn new(app: AppHandle) -> Result<Self, AppError> {
+        Ok(Self {
+            tokens: TokenManager::new(CodexCredSource),
+            app,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -127,14 +158,21 @@ impl CodexConnector {
 
         let status = resp.status();
 
-        if status.is_client_error() {
-            return Err(AppError::Unauthorized(format!(
-                "API rejected the token ({status})"
-            )));
-        }
-
-        if !status.is_success() {
-            return Err(AppError::Internal(format!("API returned {status}")));
+        match status.as_u16() {
+            401 | 403 => {
+                return Err(AppError::Unauthorized(format!(
+                    "API rejected the token ({status})"
+                )));
+            }
+            _ if status.is_client_error() => {
+                return Err(AppError::Internal(format!(
+                    "usage API returned client error {status}"
+                )));
+            }
+            _ if !status.is_success() => {
+                return Err(AppError::Internal(format!("API returned {status}")));
+            }
+            _ => {}
         }
 
         let result = resp.json().await.map_err(AppError::from);
@@ -173,8 +211,6 @@ impl CodexConnector {
     }
 }
 
-const CACHE_TTL_MS: i64 = 5 * 60 * 1_000;
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -189,108 +225,16 @@ impl UsageConnector for CodexConnector {
     }
 
     async fn generate_report(&self, force_refresh: bool) -> Result<UsageReport, AppError> {
-        // Serve from cache if fresh and not a forced refresh
-        if !force_refresh {
-            if let Some(cached) = self.read_usage_cache() {
-                if now_ms() - cached.fetched_at_ms < CACHE_TTL_MS {
-                    return Ok(UsageReport {
-                        cached: true,
-                        ..cached
-                    });
-                }
-            }
-        }
-
-        let start = Instant::now();
-
-        // 1. Get credentials from file
-        let _t1 = Instant::now();
-        let (token, account_id) = self.read_auth_file()?;
-        eprintln!(
-            "[timing] codex::generate_report read_auth_file = {:?}",
-            _t1.elapsed()
-        );
-
-        // 2. Try the live API
-        let t2 = Instant::now();
-        let result = self.get_usage_stats(&token, &account_id).await;
-        eprintln!(
-            "[timing] codex::generate_report get_usage_stats = {:?}",
-            t2.elapsed()
-        );
-
-        match result {
-            Ok(stats) => {
-                let t3 = Instant::now();
-                let report = Self::map_stats(stats);
-                self.write_usage_cache(&report);
-                eprintln!(
-                    "[timing] codex::generate_report write_cache = {:?}",
-                    t3.elapsed()
-                );
-                eprintln!(
-                    "[timing] codex::generate_report (total, success) = {:?}",
-                    start.elapsed()
-                );
-                Ok(report)
-            }
-
-            Err(AppError::Unauthorized(_)) => {
-                // 3. Token rejected — re-read the file and retry once
-                let t3 = Instant::now();
-                match self.read_auth_file() {
-                    Ok((new_token, new_account_id)) => {
-                        eprintln!(
-                            "[timing] codex::generate_report retry_fetch = {:?}",
-                            t3.elapsed()
-                        );
-                        match self.get_usage_stats(&new_token, &new_account_id).await {
-                            Ok(stats) => {
-                                let report = Self::map_stats(stats);
-                                self.write_usage_cache(&report);
-                                eprintln!(
-                                    "[timing] codex::generate_report (total, retry ok) = {:?}",
-                                    start.elapsed()
-                                );
-                                Ok(report)
-                            }
-                            Err(AppError::Unauthorized(_)) => {
-                                eprintln!(
-                                    "[timing] codex::generate_report (total, reauth) = {:?}",
-                                    start.elapsed()
-                                );
-                                Err(AppError::ReauthRequired(
-                                    "credentials expired — re-authenticate in ChatGPT".into(),
-                                ))
-                            }
-                            Err(AppError::Internal(msg)) => Err(AppError::Internal(msg)),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(AppError::ReauthRequired(msg)) => Err(AppError::ReauthRequired(msg)),
-                    Err(e) => Err(e),
-                }
-            }
-
-            Err(AppError::Internal(msg)) => {
-                // 4. Network / 5xx error — fall back to cached usage
-                if let Some(cached) = self.read_usage_cache() {
-                    eprintln!(
-                        "[timing] codex::generate_report (total, cached fallback) = {:?}",
-                        start.elapsed()
-                    );
-                    Ok(UsageReport {
-                        cached: true,
-                        ..cached
-                    })
-                } else {
-                    Err(AppError::Internal(format!(
-                        "API unavailable and no cached report available: {msg}"
-                    )))
-                }
-            }
-
-            Err(e) => Err(e),
-        }
+        run_report_flow(
+            "codex",
+            &self.tokens,
+            || self.read_usage_cache(),
+            |r| self.write_usage_cache(r),
+            |creds| async move { self.get_usage_stats(&creds.token, &creds.account_id).await },
+            Self::map_stats,
+            "credentials expired — re-authenticate in ChatGPT",
+            force_refresh,
+        )
+        .await
     }
 }
