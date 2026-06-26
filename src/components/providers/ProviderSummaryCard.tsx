@@ -10,7 +10,7 @@ interface ProviderSummaryCardProps {
   provider: ProviderConfig;
   report: UsageReport | null;
   loading: boolean;
-  error: string | null;
+  error: { kind: string; message: string } | null;
   utilization: number;
   onClick: () => void;
 }

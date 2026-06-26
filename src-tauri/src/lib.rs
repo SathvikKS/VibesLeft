@@ -16,7 +16,7 @@ pub fn run() {
         let _ = dotenvy::dotenv();
     }
 
-    let mut builder = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![greet, usage::get_usage_report])
@@ -32,9 +32,7 @@ pub fn run() {
         });
 
     #[cfg(debug_assertions)]
-    {
-        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
-    }
+    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
 
     builder
         .run(tauri::generate_context!())

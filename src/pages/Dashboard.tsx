@@ -1,7 +1,6 @@
 import { useMemo, useEffect, useRef } from 'react';
 import { useUsageReport } from '@/hooks/useUsageReport';
 import { ENABLED_PROVIDERS } from '@/providers.config';
-import { getStatusInfo } from '@/components/providers/ProviderUsageCard';
 import { ProviderSummaryCard } from '@/components/providers/ProviderSummaryCard';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
